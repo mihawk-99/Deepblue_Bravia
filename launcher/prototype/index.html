@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DeepBlue Shell</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:ital,wght@1,500;1,600&family=Kanit:ital,wght@1,800&display=swap" rel="stylesheet">
+<style>
+  :root { --bg: #000; --fg: #8ab; }
+  html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; }
+  canvas { position: absolute; inset: 0; margin: auto; width: min(100vw, 177.78vh); height: min(56.25vw, 100vh); }
+  #keys { position: fixed; left: 8px; bottom: 6px; color: var(--fg); font: 12px system-ui, sans-serif; opacity: .75; }
+</style>
+</head>
+<body>
+<canvas id="c" aria-label="Launcher prototype. Up and down arrows move, Enter opens, H replays the intro."></canvas>
+<div id="keys">↑ ↓ move · ← → page · Enter open · H = Home button · slots next to this file: art.webp/art.png (left art), bg.jpg/bg.png (scene behind the water) · press a key once to enable sound</div>
+<script>
+// Prototype of the Android launcher: same coordinates/drawing order as the APK so it ports 1:1.
+const W = 1920, H = 1080, cv = document.getElementById('c'), c = cv.getContext('2d');
+cv.width = W; cv.height = H;
+const FONT = '"Barlow Condensed", "Arial Narrow", sans-serif';   // small UI text
+const MENU_FONT = '"Kanit", sans-serif';                          // heavy geometric oblique for menu + weekday
+const TAU = Math.PI * 2;
+const PAGE = 8;  // items per menu page, like the reference menu
+
+// App list: banners/apps.json from pull_banners.sh (real labels + banners from the TV) when present,
+// else this snapshot. Settings is called SYSTEM, like the last entry of the reference menu.
+let apps = ['Netflix', 'YouTube', 'Prime Video', 'Disney+', 'Plex', 'Crunchyroll', 'Apple TV', 'Crave',
+  'DAZN', 'YouTube Music', 'Tubi', 'Pluto TV', 'Viki', 'Just Player', 'File Manager+', 'Google Play Store', 'System']
+  .map(label => ({ label: label.toUpperCase(), img: null }));
+fetch('banners/apps.json').then(r => r.json()).then(list => {
+  const isSys = a => a.pkg === 'com.android.tv.settings';
+  const ordered = [...list.filter(a => !isSys(a)).sort((a, b) => a.label.localeCompare(b.label)), ...list.filter(isSys)];
+  apps = ordered.map(a => ({ label: a.label.toUpperCase(), img: a.banner ? Object.assign(new Image(), { src: a.banner }) : null }));
+  sel = 0; pos = 0;
+}).catch(() => {});
+
+const CYAN = ['#7cf0ff', '#5fe3fb', '#49d2f6', '#6aeafc'];
+
+let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const bubbles = Array.from({ length: 10 }, () => ({ x: .3 + rnd() * .7, y: rnd(), r: 3 + rnd() * 6, v: .01 + rnd() * .02, ph: rnd() * TAU }));
+const flecks = Array.from({ length: 7 }, () => ({ x: .02 + rnd() * .3, y: rnd(), s: .006 + rnd() * .012, a: rnd() * 360, v: .006 + rnd() * .012, k: Math.floor(rnd() * 3) }));
+const splash = Array.from({ length: 11 }, () => ({ x: rnd(), y: .45 + rnd() * .7, r: 120 + rnd() * 260, up: .4 + rnd() * .8, a: rnd() * TAU, b: rnd() * TAU, light: rnd() < .55 }));
+const rings = Array.from({ length: 26 }, () => ({ x: rnd(), y: .2 + rnd() * .9, r: 6 + rnd() * 26, up: .5 + rnd(), fill: rnd() < .4 }));
+
+// Diagonal light: brightest at the top-right surface, deep royal blue bottom-left.
+const water = c.createLinearGradient(W * .85, -H * .1, W * .25, H * 1.05);
+[[0, '#52e2ff'], [.22, '#2fb4fb'], [.45, '#1b79ee'], [.7, '#1146dc'], [1, '#0a26b8']].forEach(([f, col]) => water.addColorStop(f, col));
+
+// Caustics: one tileable light-network texture (Dave Hoskins' tileable water caustic, evaluated once on the CPU),
+// drawn twice with different scroll/scale so the overlap shimmers, then faded out below the surface.
+function causticTexture(size) {
+  const t = document.createElement('canvas'); t.width = t.height = size;
+  const g = t.getContext('2d'), img = g.createImageData(size, size);
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    const px = (x / size) * TAU - 250, py = (y / size) * TAU - 250;
+    let ix = px, iy = py, col = 1;
+    for (let n = 0; n < 5; n++) {
+      const tt = 10 * (1 - 3.5 / (n + 1)), nx = px + Math.cos(tt - ix) + Math.sin(tt + iy), ny = py + Math.sin(tt - iy) + Math.cos(tt + ix);
+      ix = nx; iy = ny;
+      col += 1 / Math.hypot(px / (Math.sin(ix + tt) / .005), py / (Math.cos(iy + tt) / .005));
+    }
+    col = 1.17 - Math.pow(col / 5, 1.4);
+    const o = (y * size + x) * 4, v = Math.min(1, Math.pow(Math.abs(col), 8));
+    img.data[o] = 210; img.data[o + 1] = 250; img.data[o + 2] = 255; img.data[o + 3] = v * 255;
+  }
+  g.putImageData(img, 0, 0); return t;
+}
+const CAUSTIC_H = H * .62, off = document.createElement('canvas');
+off.width = W / 2; off.height = CAUSTIC_H / 2;   // half-res: cheaper and naturally soft
+const oc = off.getContext('2d'), caustic = oc.createPattern(causticTexture(256), 'repeat');
+const fade = oc.createLinearGradient(0, 0, 0, off.height);
+fade.addColorStop(0, 'rgba(0,0,0,1)'); fade.addColorStop(.45, 'rgba(0,0,0,.55)'); fade.addColorStop(1, 'rgba(0,0,0,0)');
+
+// User slots (never committed, see .gitignore): left-side art and a background scene seen through the water.
+function slot(names) {
+  const img = new Image(); img.ok = false; let i = 0;
+  img.onload = () => { img.ok = true; }; img.onerror = () => { if (++i < names.length) img.src = names[i]; };
+  img.src = names[0]; return img;
+}
+const art = slot(['art.webp', 'art.png']), scene = slot(['bg.jpg', 'bg.png', 'bg.webp']);
+
+// Video slot: art.intro.mp4 plays once on open, then art.loop.mp4 loops. When present it replaces the
+// procedural water, slab and splash entirely; the menu is drawn on top like the reference layering.
+function vid(src, loop) {
+  const v = document.createElement('video');
+  Object.assign(v, { src, loop, muted: true, playsInline: true, preload: 'auto' }); v.ok = false;
+  v.addEventListener('loadeddata', () => { v.ok = true; }); return v;
+}
+const vIntro = vid('art.intro.mp4', false), vLoop = vid('art.loop.mp4', true);
+let vActive = null;
+const hasVideo = () => vIntro.ok && vLoop.ok;
+function restartVideo() {
+  if (!hasVideo()) return;
+  vLoop.pause(); vLoop.currentTime = 0; vIntro.currentTime = 0; vIntro.play(); vActive = vIntro;
+  intro = 1;  // the video's own flash + splash replaces ours
+}
+vIntro.addEventListener('ended', () => { vLoop.play(); vActive = vLoop; });
+Promise.all([vIntro, vLoop].map(v => new Promise(r => v.addEventListener('loadeddata', r)))).then(restartVideo);
+// menu entrance follows the video's splash (it clears ~1.1s in) instead of our own timer
+const videoIntroE = () => vActive === vIntro ? ease(clamp01((vIntro.currentTime - 1.1) / .6)) : 1;
+
+// UI sounds: original synths from make_sounds.py, same files the APK bundles.
+const sfx = Object.fromEntries(['move', 'confirm', 'splash', 'page'].map(n => [n, new Audio(`../res/raw/${n}.wav`)]));
+const play = n => sfx[n].cloneNode().play().catch(() => {});  // browsers block audio until the first key press
+
+let sel = 0, pos = 0, pop = 1, intro = 0, last = 0, confirmT = -1, launching = null;
+
+const jit = (i, k) => { const h = Math.sin(i * 12.9898 + k * 78.233) * 43758.5453; return (h - Math.floor(h)) * 2 - 1; };
+const ease = t => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2); };
+const clamp01 = v => Math.max(0, Math.min(1, v));
+const pageOf = i => Math.floor(i / PAGE);
+const slotY = i => H * .37 + i * H * .056;
+const slotX = idx => W * .49 + jit(idx, 1) * W * .025;
+
+function heavyText(str, x, y, size, color, align = 'center') {
+  c.save();
+  c.font = `italic 800 ${size}px ${MENU_FONT}`; c.textAlign = align; c.letterSpacing = `${-0.04 * size}px`;
+  c.translate(x, y); c.transform(1, 0, -0.08, 1, 0, 0);   // extra lean on top of the italic
+  c.fillStyle = color; c.fillText(str, 0, 0);
+  c.restore();
+}
+function measure(str, size) { c.save(); c.font = `italic 800 ${size}px ${MENU_FONT}`; c.letterSpacing = `${-0.04 * size}px`; const w = c.measureText(str).width; c.restore(); return w; }
+function poly(pts) { c.beginPath(); pts.forEach(([x, y], i) => i ? c.lineTo(x, y) : c.moveTo(x, y)); c.closePath(); }
+function cover(img, x, y, w, h) {  // draw an image or video scaled to cover the box
+  const nw = img.naturalWidth || img.videoWidth, nh = img.naturalHeight || img.videoHeight;
+  const s = Math.max(w / nw, h / nh), iw = nw * s, ih = nh * s;
+  c.drawImage(img, x + (w - iw) / 2, y + (h - ih) / 2, iw, ih);
+}
+
+function drawWater(t, dt) {
+  c.fillStyle = water; c.fillRect(0, 0, W, H);
+  if (scene.ok) {  // the room seen through water: blurred greyscale, overlaid so it takes the water's blue
+    c.save(); c.filter = 'grayscale(1) blur(5px) contrast(1.15)'; c.globalCompositeOperation = 'overlay'; c.globalAlpha = .55;
+    cover(scene, 0, 0, W, H); c.restore();
+  }
+  // caustic light network near the surface
+  oc.globalCompositeOperation = 'copy';
+  caustic.setTransform(new DOMMatrix().translate(t * 9, -t * 3).scale(2.6, 1.1));
+  oc.fillStyle = caustic; oc.fillRect(0, 0, off.width, off.height);
+  oc.globalCompositeOperation = 'lighter';
+  caustic.setTransform(new DOMMatrix().translate(-t * 6 + 90, t * 2 + 40).scale(-2.2, 1.0));
+  oc.fillRect(0, 0, off.width, off.height);
+  oc.globalCompositeOperation = 'destination-in'; oc.fillStyle = fade; oc.fillRect(0, 0, off.width, off.height);
+  c.save(); c.globalCompositeOperation = 'lighter'; c.globalAlpha = .55; c.drawImage(off, 0, 0, W, CAUSTIC_H); c.restore();
+  // a few small bubbles drifting up
+  c.fillStyle = 'rgba(150,225,255,0.45)';
+  for (const b of bubbles) {
+    b.y -= b.v * dt; if (b.y < -0.03) b.y = 1.03;
+    c.beginPath(); c.arc(b.x * W + Math.sin(t * 1.1 + b.ph) * 8, b.y * H, b.r, 0, TAU); c.fill();
+  }
+}
+
+function drawSlab(dt, introE) {
+  // white slab with cyan streaks along its edge (stands in for art when no art file is present)
+  poly([[0, 0], [W * .25, 0], [W * .19, H * .42], [W * .23, H * .47], [W * .11, H], [0, H]]); c.fillStyle = '#fff'; c.fill();
+  c.fillStyle = '#3fd0ff'; poly([[W * .25, 0], [W * .262, 0], [W * .2, H * .43], [W * .19, H * .42]]); c.fill();
+  c.fillStyle = '#1e7cff'; poly([[W * .23, H * .47], [W * .245, H * .48], [W * .13, H], [W * .11, H]]); c.fill();
+  if (art.ok) {  // art slot: fit to screen height, centred over the slab, eases in with the intro
+    const h = H * 1.02, w = h * art.naturalWidth / art.naturalHeight;
+    c.save(); c.globalAlpha = introE; c.drawImage(art, W * .2 - w / 2 - (1 - introE) * W * .05, H - h, w, h); c.restore();
+  }
+  // a few pink / white / violet flecks
+  const cols = ['rgba(255,90,190,.85)', 'rgba(255,255,255,.9)', 'rgba(150,70,255,.7)'];
+  for (const s of flecks) {
+    s.y -= s.v * dt; if (s.y < -.05) s.y = 1.05; s.a += dt * 15;
+    const z = s.s * H; c.save(); c.translate(s.x * W, s.y * H); c.rotate(s.a * Math.PI / 180);
+    c.fillStyle = cols[s.k]; poly([[-z, 0], [z, -z * .3], [z * .2, z * .4]]); c.fill(); c.restore();
+  }
+}
+
+function drawInfo(day, time, date, introE) {
+  // giant vertical weekday with a grey echo, shrunk so the whole word fits; slides in from the left
+  const big = W * .16, daySize = Math.min(big, big * H * .95 / measure(day, big));
+  c.save(); c.translate(W * .118 - (1 - introE) * W * .15, H * .985); c.rotate(-Math.PI / 2);
+  heavyText(day, H * .05, -daySize * .62, daySize, '#a9a9a9', 'left');
+  heavyText(day, 0, 0, daySize, '#0b0b12', 'left');
+  c.restore();
+  // time box, styled like the reference's wallet box: thin border, light italic figures
+  const l = W * .125, tp = H * .05, r = W * .245, b = H * .14;
+  c.fillStyle = '#fff'; c.fillRect(l, tp, r - l, b - tp);
+  c.lineWidth = 2; c.strokeStyle = '#333'; c.strokeRect(l, tp, r - l, b - tp);
+  c.fillStyle = '#111'; c.letterSpacing = '0px'; c.textAlign = 'left';
+  c.font = `italic 500 ${H * .05}px ${FONT}`; c.fillText(time, l + W * .01, tp + H * .055);
+  c.font = `italic 600 ${H * .016}px ${FONT}`; c.fillText(date, l + W * .01, tp + H * .078);
+}
+
+function drawMenuItems(introE, t) {
+  const first = pageOf(sel) * PAGE, count = Math.min(PAGE, apps.length - first), s = sel - first, pages = pageOf(apps.length - 1) + 1;
+  c.save();
+  c.translate(Math.sin(t * .9) * 4 - (1 - introE) * W * .25, Math.sin(t * 1.3) * 3);  // idle sway + intro slide
+  c.globalAlpha = introE;
+  for (let i = count - 1; i >= 0; i--) {  // bottom first so higher items overlap lower ones
+    if (i === s) continue;
+    const idx = first + i, d = i - pos;
+    const off = d < 0 ? -H * .018 * Math.min(1, -d) : H * .03 * Math.min(1, d);  // neighbours make room for the selection
+    let size = H * (.078 + .008 * jit(idx, 3)); const w = measure(apps[idx].label, size); if (w > W * .3) size *= W * .3 / w;
+    c.save(); c.translate(slotX(idx), slotY(i) + off); c.rotate((-14 + jit(idx, 2) * 4) * Math.PI / 180);  // reference lines tilt -9..-21deg
+    heavyText(apps[idx].label, 0, 0, size, CYAN[idx % 4]);
+    c.restore();
+  }
+  if (pages > 1) {
+    c.fillStyle = 'rgba(255,255,255,.85)'; c.font = `italic 600 ${H * .024}px ${FONT}`; c.textAlign = 'center'; c.letterSpacing = '0px';
+    const label = `${pageOf(sel) + 1} / ${pages}`, px = W * .49, py = slotY(count) + H * .045, hw = c.measureText(label).width / 2 + H * .022;
+    c.fillText(label, px, py); tri(px - hw, py - H * .008, H * .008, 'l'); tri(px + hw, py - H * .008, H * .008, 'r');
+  }
+  c.restore();
+}
+
+function drawSelected(introE, t) {
+  const first = pageOf(sel) * PAGE, label = apps[sel].label, e = ease(pop);
+  const k1 = confirmT < 0 ? 0 : clamp01(confirmT / .12);
+  let size = H * .1, w = measure(label, size);
+  if (w > W * .34) { size *= W * .34 / w; w = W * .34; }
+  const boil = Math.floor(t * 8), jx = jit(boil, 4) * 2.5, jy = jit(boil, 5) * 2;  // hand-drawn jitter, ~8 redraws a second
+  c.save(); c.globalAlpha = introE;
+  c.translate(slotX(sel) + Math.sin(t * .9) * 4 - (1 - introE) * W * .25 - W * .06 * ease(k1), slotY(sel - first) + Math.sin(t * 1.3) * 3);
+  c.rotate(-15 * Math.PI / 180); const sc = (.8 + .2 * e) * (1 + .45 * ease(k1)); c.scale(sc, sc);
+  if (k1 < .5) {
+    // short white wedge from just left of the word up to a point past its end, pink fringe below
+    const sweep = Math.min(1, pop * 1.6), tail = [-w * .62, size * .12];
+    const grow = ([x, y]) => [tail[0] + (x - tail[0]) * sweep + jx, tail[1] + (y - tail[1]) * sweep + jy];
+    const tip = grow([w * .68, -size * 1.05]), corner = grow([w * .5, -size * .1]);
+    c.fillStyle = '#ff6fd0'; poly([[tail[0] + 5, tail[1] + 6], [tip[0] + 5, tip[1] + 6], [corner[0] + 5, corner[1] + 6]]); c.fill();
+    c.fillStyle = '#fff'; poly([tail, tip, corner]); c.fill();
+    heavyText(label, -size * .045 + jx, size * .035, size, '#0b0b12');  // black offset shadow
+    heavyText(label, jx * .5, 0, size, '#ec0f2a');                    // red face
+  } else {
+    heavyText(label, 0, 0, size, '#0b0b12');                           // confirm: label goes solid black
+  }
+  c.restore();
+}
+
+// Preview of the selected app: its own banner (or icon) in a tilted white frame with a pink offset,
+// sliding in on each selection like the menu's pop.
+function drawCard(introE) {
+  const img = apps[sel].img;
+  if (!img || !img.complete || !img.naturalWidth) return;
+  const e = ease(pop), cw = W * .25, ch = cw * 9 / 16;
+  const cx = W * .8 + (1 - e) * W * .05 + (1 - introE) * W * .3, cy = H * .4;
+  c.save(); c.globalAlpha = introE * Math.min(1, pop * 3); c.translate(cx, cy); c.rotate(-6 * Math.PI / 180);
+  c.fillStyle = '#ff6fd0'; c.fillRect(-cw / 2 - 7 + 12, -ch / 2 - 7 + 12, cw + 14, ch + 14);  // pink offset, like the wedge fringe
+  c.fillStyle = '#fff'; c.fillRect(-cw / 2 - 7, -ch / 2 - 7, cw + 14, ch + 14);              // white frame
+  if (img.naturalWidth / img.naturalHeight > 1.4) c.drawImage(img, -cw / 2, -ch / 2, cw, ch);  // banner fills the card
+  else { const s = ch * .72; c.drawImage(img, -s / 2, -s / 2, s, s); }                          // square icon, centred
+  c.restore();
+}
+
+// Small arrow shapes (the hint font has no arrow glyphs). dir: u d l r
+function tri(cx, cy, s, dir) {
+  const pts = { u: [[0, -1], [1, .8], [-1, .8]], d: [[0, 1], [1, -.8], [-1, -.8]], l: [[-1, 0], [.8, -1], [.8, 1]], r: [[1, 0], [-.8, -1], [-.8, 1]] }[dir];
+  poly(pts.map(([x, y]) => [cx + x * s, cy + y * s])); c.fill();
+}
+
+function drawHints() {
+  const hint = apps[sel].label === 'SYSTEM' ? 'Open Settings' : 'Launch App';
+  c.save(); c.fillStyle = c.strokeStyle = '#fff'; c.letterSpacing = '0px';
+  c.font = `italic 600 ${H * .043}px ${FONT}`; c.textAlign = 'right'; c.fillText(hint, W * .965, H * .89);
+  const lx = W * .965 - c.measureText(hint).width;
+  c.font = `italic 600 ${H * .015}px ${FONT}`; c.textAlign = 'left'; c.fillText('Command', lx, H * .91);
+  c.lineWidth = 1.5; c.beginPath(); const cx = lx + c.measureText('Command ').width; c.moveTo(cx, H * .906); c.lineTo(W, H * .906); c.stroke();
+  let x = W * .965;
+  if (pageOf(apps.length - 1) > 0) x = button(x, H * .962, 'Page', 'lr') - W * .012;
+  x = button(x, H * .962, 'Select', 'ud');
+  button(x - W * .012, H * .962, 'Confirm', 'OK');
+  c.restore();
+}
+function button(right, y, word, glyph) {  // glyph: 'ud' / 'lr' arrow pairs, or short text
+  c.font = `italic 600 ${H * .036}px ${FONT}`; c.textAlign = 'right'; c.fillText(word, right, y);
+  const r = H * .016, cx = right - c.measureText(word).width - r - H * .006, cy = y - H * .012;
+  c.lineWidth = 2.5; c.beginPath(); c.arc(cx, cy, r, 0, TAU); c.stroke();
+  if (glyph === 'ud') { tri(cx, cy - r * .38, r * .3, 'u'); tri(cx, cy + r * .38, r * .3, 'd'); }
+  else if (glyph === 'lr') { tri(cx - r * .38, cy, r * .3, 'l'); tri(cx + r * .38, cy, r * .3, 'r'); }
+  else { c.font = `600 ${r * .95}px ${FONT}`; c.textAlign = 'center'; c.fillText(glyph, cx, cy + r * .35); }
+  return cx - r;
+}
+
+// Confirm: blue wash over everything but the chosen label, then a dark ink blob swallows the screen.
+function drawWash() {
+  if (confirmT < 0) return;
+  c.fillStyle = `rgba(10,59,216,${.7 * clamp01(confirmT / .12)})`; c.fillRect(0, 0, W, H);
+}
+function blob(cx, cy, R, a, b, t) {
+  c.beginPath();
+  for (let k = 0; k <= 48; k++) {
+    const ang = k / 48 * TAU, r = R * (1 + .12 * Math.sin(ang * 3 + a + t * 6) + .06 * Math.sin(ang * 7 + b - t * 9));
+    k ? c.lineTo(cx + Math.cos(ang) * r, cy + Math.sin(ang) * r) : c.moveTo(cx + Math.cos(ang) * r, cy + Math.sin(ang) * r);
+  }
+  c.closePath();
+}
+function drawBlob(t) {
+  const k = confirmT < 0 ? 0 : clamp01((confirmT - .1) / .3); if (k <= 0) return;
+  blob(W * .2, H * .38, k * k * W * 1.3, 0, 1, t); c.fillStyle = '#0b1d5a'; c.fill();
+}
+
+// Intro: white flash, then a cel-shaded splash (ragged blobs with darker rims + bubble rings) bursting up and away.
+function drawSplash(t) {
+  if (intro >= 1) return;
+  const a = Math.pow(1 - intro, 1.4);
+  c.save(); c.globalAlpha = a;
+  for (const s of splash) {
+    blob(s.x * W, (s.y - intro * s.up * .8) * H, s.r * (.5 + intro * 1.6), s.a, s.b, 0);
+    c.fillStyle = s.light ? '#c8f5ff' : '#8fe2ff'; c.fill();
+    c.lineWidth = 6; c.strokeStyle = '#4fb8f5'; c.stroke();
+  }
+  c.lineWidth = 3; c.strokeStyle = '#d8f8ff'; c.fillStyle = '#d8f8ff';
+  for (const r of rings) {
+    c.beginPath(); c.arc(r.x * W, (r.y - intro * r.up) * H, r.r, 0, TAU); r.fill ? c.fill() : c.stroke();
+  }
+  c.globalAlpha = clamp01(1 - intro / .3); c.fillStyle = '#fdfdfd'; c.fillRect(0, 0, W, H);
+  c.restore();
+}
+
+function drawLaunch() {
+  if (!launching) return;
+  c.save(); c.fillStyle = '#fff'; c.font = `italic 600 ${H * .04}px ${FONT}`; c.textAlign = 'center'; c.letterSpacing = '0px';
+  c.fillText(`(prototype) the TV would now open ${launching}`, W / 2, H * .52); c.restore();
+}
+
+let clockAt = 0, day = '', time = '', date = '';
+function tickClock(ms) {
+  if (ms - clockAt < 1000) return; clockAt = ms; const d = new Date(ms);
+  day = d.toLocaleDateString('en-US', { weekday: 'long' }).toUpperCase();
+  time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).replace(/\s?[AP]M/i, '');
+  date = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }).replace(',', '').toLowerCase();
+}
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (now - last < 1000 / 60 - 2) return;      // cap at 60fps (TV UI refresh) even on faster monitors
+  const dt = last ? Math.min(.1, (now - last) / 1000) : 0; last = now;
+  const t = (now % 3600000) / 1000;
+  pos += (sel - pageOf(sel) * PAGE - pos) * Math.min(1, dt * 20); pop = Math.min(1, pop + dt * 9);
+  intro = Math.min(1, intro + dt / .9);
+  if (confirmT >= 0) {
+    confirmT += dt;
+    if (confirmT > .45 && !launching) launching = apps[sel].label;   // device: startActivity() here
+    if (confirmT > 1.8) { confirmT = -1; launching = null; intro = 0; restartVideo(); play('splash'); }  // simulate coming back home
+  }
+  tickClock(Date.now());
+  const video = hasVideo() && vActive;
+  const introE = ease(clamp01((intro - .15) / .85)) * (video ? videoIntroE() : 1);
+  if (video) cover(vActive, 0, 0, W, H); else { drawWater(t, dt); drawSlab(dt, introE); }
+  drawInfo(day, time, date, introE); drawCard(introE); drawHints();
+  drawMenuItems(introE, t); drawWash(); drawSelected(introE, t); drawBlob(t);
+  drawSplash(t); drawLaunch();
+}
+
+// Held keys auto-repeat ~30x/s; restarting the tick that fast stacks copies into a painful whine.
+// So: repeats move the cursor at most every REPEAT_MS, and a sound plays at most every SOUND_MS (no overlap).
+const REPEAT_MS = 110, SOUND_MS = 150;
+let lastMoveAt = 0, lastSoundAt = 0;
+function move(d, repeat) {
+  const now = performance.now();
+  if (repeat && now - lastMoveAt < REPEAT_MS) return;
+  lastMoveAt = now;
+  const n = apps.length, next = (sel + d + n) % n, flip = pageOf(next) !== pageOf(sel);
+  if (flip) { intro = .38; pos = next - pageOf(next) * PAGE; }  // new page: splash it in
+  if (flip || now - lastSoundAt >= SOUND_MS) { play(flip ? 'page' : 'move'); lastSoundAt = now; }
+  sel = next; pop = 0;
+}
+// Left/right jump a whole page (wrapping), keeping the cursor's slot where the new page has one.
+const PAGE_REPEAT_MS = 300;
+function flipPage(d, repeat) {
+  const now = performance.now(), pages = pageOf(apps.length - 1) + 1;
+  if (pages < 2 || (repeat && now - lastMoveAt < PAGE_REPEAT_MS)) return;
+  lastMoveAt = lastSoundAt = now;
+  const slot = sel - pageOf(sel) * PAGE, np = (pageOf(sel) + d + pages) % pages;
+  sel = np * PAGE + Math.min(slot, Math.min(PAGE, apps.length - np * PAGE) - 1);
+  intro = .38; pos = sel - np * PAGE; pop = 0; play('page');
+}
+addEventListener('keydown', e => {
+  if (confirmT >= 0) return e.preventDefault();
+  if (e.key === 'ArrowUp') move(-1, e.repeat);
+  else if (e.key === 'ArrowDown') move(1, e.repeat);
+  else if (e.key === 'ArrowLeft') flipPage(-1, e.repeat);
+  else if (e.key === 'ArrowRight') flipPage(1, e.repeat);
+  else if (e.key === 'Enter') { confirmT = 0; play('confirm'); }
+  else if (e.key === 'h' || e.key === 'H') { intro = 0; sel = 0; pos = 0; pop = 0; restartVideo(); play('splash'); }
+  else return;
+  e.preventDefault();
+});
+document.fonts.load(`italic 800 40px ${FONT}`).then(() => { requestAnimationFrame(frame); play('splash'); });
+</script>
+</body>
+</html>

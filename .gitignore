@@ -1,0 +1,11 @@
+platform-tools/
+backup/
+android-sdk/
+*.keystore
+launcher/build/
+reference/
+launcher/prototype/art.*
+launcher/prototype/bg.*
+launcher/prototype/banners/
+launcher/tv-media/
+sony-google-tv-debloat/
