@@ -39,6 +39,11 @@ import java.util.Set;
  */
 public class Home extends Activity implements MenuView.Host {
     static final String SETTINGS_PKG = "com.android.tv.settings";
+    /** Page 1, in this order; everything else follows by use. */
+    private static final List<String> PINNED = List.of(
+            "com.google.android.youtube.tv", "com.google.android.youtube.tvmusic", "com.plexapp.android",
+            "com.netflix.ninja", "com.amazon.amazonvideo.livingroom", "com.limelight",
+            "com.alphainventor.filemanager", "com.android.vending");
     private static final String TAG = "DeepBlue";
 
     private MenuView view;
@@ -162,8 +167,12 @@ public class Home extends Activity implements MenuView.Host {
             a.launches = prefs.getInt(pkg, 0);
             list.add(a);
         }
-        // most used first, then A-Z
-        list.sort((x, y) -> x.launches != y.launches ? y.launches - x.launches : x.label.compareTo(y.label));
+        // pinned first, then most used, then A-Z
+        list.sort((x, y) -> {
+            int px = pinRank(x.pkg), py = pinRank(y.pkg);
+            if (px != py) return px - py;
+            return x.launches != y.launches ? y.launches - x.launches : x.label.compareTo(y.label);
+        });
         MenuView.App sys = new MenuView.App();  // last entry, like SYSTEM in the reference menu
         sys.pkg = SETTINGS_PKG;
         sys.label = "SYSTEM";
@@ -176,6 +185,11 @@ public class Home extends Activity implements MenuView.Host {
         }
         list.add(sys);
         return list;
+    }
+
+    private static int pinRank(String pkg) {
+        int i = PINNED.indexOf(pkg);
+        return i < 0 ? PINNED.size() : i;
     }
 
     @Override
