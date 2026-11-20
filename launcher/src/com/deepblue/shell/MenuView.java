@@ -197,7 +197,7 @@ class MenuView extends View {
         tickClock();
         boolean video = host.hasVideo();
         float vs = video ? host.introVideoSeconds() : -1;
-        float introE = ease(clamp01((intro - .15f) / .85f)) * (vs < 0 ? 1 : ease(clamp01((vs - 1.1f) / .6f)));
+        float introE = ease(clamp01((intro - .15f) / .85f)) * (vs < 0 ? 1 : ease(clamp01((vs - .17f) / .6f)));
 
         if (!video) { drawWater(c, t, dt); drawSlab(c, dt, introE); }
         drawInfo(c, introE);
@@ -210,6 +210,7 @@ class MenuView extends View {
         }
         drawBlob(c, t);
         drawSplash(c);
+        if (vs == 0) c.drawColor(0xFFFDFDFD);  // video not on screen yet: hold the white flash the clip opens with
         if (hasWindowFocus() || confirmT >= 0) postInvalidateOnAnimation();  // vsync-paced: 60 fps on the TV, idle when hidden
     }
 

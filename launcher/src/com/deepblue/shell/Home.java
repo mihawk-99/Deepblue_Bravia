@@ -54,7 +54,7 @@ public class Home extends Activity implements MenuView.Host {
     private TextureView introTex, loopTex;
     private Surface introSurface, loopSurface;
     private MediaPlayer intro, loop;
-    private boolean introReady, introDone, loopReady;
+    private boolean introReady, introDone, loopReady, introShown;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -110,7 +110,7 @@ public class Home extends Activity implements MenuView.Host {
         view.enter(toTop);
         stopVideo();
         startVideo();
-        play("splash");
+        if (!video) play("splash");  // with video, the splash sound waits for the clip's first frame
     }
 
     @Override
@@ -221,8 +221,9 @@ public class Home extends Activity implements MenuView.Host {
 
     @Override
     public float introVideoSeconds() {
-        if (intro == null || introDone) return -1;
-        return introReady ? intro.getCurrentPosition() / 1000f : 0;
+        if (!video || introDone) return -1;
+        if (!introShown) return 0;  // decoder still starting: the view stays white instead of showing the last visit's frame
+        return intro != null ? intro.getCurrentPosition() / 1000f : -1;
     }
 
     private TextureView texture(boolean isLoop) {
@@ -255,6 +256,7 @@ public class Home extends Activity implements MenuView.Host {
 
         @Override
         public void onSurfaceTextureUpdated(SurfaceTexture st) {
+            if (!isLoop && introReady && !introShown) { introShown = true; play("splash"); }
             // the loop has drawn its first frame under the finished intro: now hide the intro layer
             if (isLoop && introDone && introTex.getVisibility() == View.VISIBLE) introTex.setVisibility(View.INVISIBLE);
         }
@@ -262,7 +264,7 @@ public class Home extends Activity implements MenuView.Host {
 
     private void startVideo() {
         if (!video || !resumed || introSurface == null || loopSurface == null || intro != null) return;
-        introReady = introDone = loopReady = false;
+        introReady = introDone = loopReady = introShown = false;
         introTex.setVisibility(View.VISIBLE);
         intro = player(introFile, introSurface, false);
         loop = player(loopFile, loopSurface, true);

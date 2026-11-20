@@ -99,8 +99,8 @@ function restartVideo() {
 }
 vIntro.addEventListener('ended', () => { vLoop.play(); vActive = vLoop; });
 Promise.all([vIntro, vLoop].map(v => new Promise(r => v.addEventListener('loadeddata', r)))).then(restartVideo);
-// menu entrance follows the video's splash (it clears ~1.1s in) instead of our own timer
-const videoIntroE = () => vActive === vIntro ? ease(clamp01((vIntro.currentTime - 1.1) / .6)) : 1;
+// menu entrance follows the video's splash (it clears ~.17s in) instead of our own timer
+const videoIntroE = () => vActive === vIntro ? ease(clamp01((vIntro.currentTime - .17) / .6)) : 1;
 
 // UI sounds: original synths from make_sounds.py, same files the APK bundles.
 const sfx = Object.fromEntries(['move', 'confirm', 'splash', 'page'].map(n => [n, new Audio(`../res/raw/${n}.wav`)]));
