@@ -35,6 +35,9 @@ EXTRA_PKGS=(
   com.sony.dtv.tvinput.atsc3tuner com.sony.dtv.tvinput.atsc3tuner.drmlicenseinstaller
   com.sony.dtv.voicesearch com.sony.dtv.voicerecognitionconfirmation
   com.android.hotspot2.osulogin android.autoinstalls.config.sony.bravia
+  # unused streaming apps; Apple TV and Disney+ are preinstalled, the rest came from Play (restore = reinstall from Play)
+  com.apple.atve.sony.appletv com.disney.disneyplus ca.bellmedia.cravetv com.dazn com.crunchyroll.crunchyroid
+  tv.pluto.android com.viki.android com.tubitv
   # MediaTek telemetry agent. PERSISTENT: this build re-adds and starts it at every boot regardless
   # (needs root to stop for good); measured idle afterwards, 0 CPU. Kept so re-runs/restore stay consistent.
   com.mediatek.dmagent
