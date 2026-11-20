@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Sony A80CJ (BRAVIA_VH2, Android 12 Google TV) debloat over ADB wifi.
-# Usage: ./debloat.sh [debloat|restore]   (TV IP via TV=ip:port, default 192.168.50.143:5555)
+# Usage: TV=<tv-ip>:5555 ./debloat.sh [debloat|restore]
 # Everything here is per-user removal/disable: reversible with `restore` or a factory reset.
 set -u
 cd "$(dirname "$0")"
-export PATH="$PWD/platform-tools:$PATH" ANDROID_SERIAL="${TV:-192.168.50.143:5555}"
+export PATH="$PWD/platform-tools:$PATH" ANDROID_SERIAL="${TV:?set TV=<tv-ip>:5555}"
 adb connect "$ANDROID_SERIAL" >/dev/null
 
 # From the cloned guide (sony-google-tv-debloat/README.md), only packages present on this TV.

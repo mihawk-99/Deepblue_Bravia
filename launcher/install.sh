@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Install DeepBlue on the TV and make it the Home screen.   ./install.sh          (after ./build.sh)
 # Put Google TV's home back:                                 ./install.sh restore
-# TV address via TV=ip:port (default 192.168.50.143:5555).
+# TV address via TV=<tv-ip>:5555 (required).
 set -euo pipefail
 cd "$(dirname "$0")"
-export PATH="$PWD/../platform-tools:$PATH" ANDROID_SERIAL="${TV:-192.168.50.143:5555}"
+export PATH="$PWD/../platform-tools:$PATH" ANDROID_SERIAL="${TV:?set TV=<tv-ip>:5555}"
 adb connect "$ANDROID_SERIAL" >/dev/null
 
 # Google TV's home and setup apps claim Home at a priority only system apps may use, so a third-party

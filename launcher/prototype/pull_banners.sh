@@ -6,7 +6,7 @@
 set -u
 cd "$(dirname "$0")"
 ROOT=../..
-export PATH="$ROOT/platform-tools:$PATH" ANDROID_SERIAL="${TV:-192.168.50.143:5555}"
+export PATH="$ROOT/platform-tools:$PATH" ANDROID_SERIAL="${TV:?set TV=<tv-ip>:5555}"
 AAPT2=$ROOT/android-sdk/build-tools/35.0.0/aapt2
 TMP=$(mktemp -d) && trap 'rm -rf "${TMP:?}"' EXIT
 mkdir -p banners && rm -f banners/*
