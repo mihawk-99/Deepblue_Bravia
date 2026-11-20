@@ -1,5 +1,7 @@
 # Deepblue_Bravia
 
+![The DeepBlue home screen on a Sony A80CJ](docs/screenshot.jpg)
+
 A debloat kit and a fast custom home screen for Sony BRAVIA TVs running Google TV, done entirely over ADB on your
 home network. No root.
 
