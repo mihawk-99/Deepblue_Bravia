@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Deck Edit prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600&family=Cormorant+SC:wght@700&display=swap" rel="stylesheet">
+<style>
+  :root { --bg: #000; --fg: #c9a; }
+  html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; }
+  canvas { position: absolute; inset: 0; margin: auto; width: min(100vw, 177.78vh); height: min(56.25vw, 100vh); }
+  #keys { position: fixed; left: 8px; bottom: 6px; color: var(--fg); font: 12px system-ui, sans-serif; opacity: .75; }
+</style>
+</head>
+<body>
+<canvas id="c" aria-label="Deck editor launcher prototype. Arrow keys move, Enter opens, H replays the deal."></canvas>
+<div id="keys">↑ ↓ ← → move · Enter open · hold Enter to move a card · M or Esc = menu (Back) · R default deck · H = Home button · press a key once to enable sound</div>
+<script>
+// Deck-editor theme: every app is a card. Everything in deck/ is built by deck/make_assets.py from your own copy of
+// the game and its HD texture pack (none of it is in the repository). The screen is laid out at
+// 1920x1080, four times the PSP original, so the HD pack's textures draw 1:1.
+const W = 1920, H = 1080, cv = document.getElementById('c'), c = cv.getContext('2d');
+cv.width = W; cv.height = H;
+const UI = '"Barlow Condensed", "Arial Narrow", sans-serif', NAME = '"Cormorant SC", Georgia, serif', TEXT = 'Georgia, "Times New Roman", serif';
+const TAU = Math.PI * 2, COLS = 8, SIDE_ROWS = 2;
+const CW = 432, CH = 616;                       // a full card: frame-*.png
+const MW = 183, MH = 261, GAP = 46;             // cards in the grids
+const POP = 1.22, MINI_W = 224, MINI_H = 319;   // the selected card grows in place; grid bitmaps are drawn at that size so it stays sharp
+const WX = 40, WW = 1840, GX = 67;              // the two windows span the screen; first grid column
+const DECK_TAB = 12, SIDE_TAB = 401, DECK_Y = 80, SIDE_Y = 472, ROW = MH + 12;
+const PILE = [W - 140, H + 180];                // cards are dealt from below the bottom-right corner
+
+// Card kinds, shown the way the game colours its cards. attr: which attribute orb sits on the name bar.
+const KIND = {
+  normal: { cat: 'Video', line: 'Normal', attr: 'light' },
+  effect: { cat: 'Music', line: 'Effect', attr: 'wind' },
+  ritual: { cat: 'Game', line: 'Ritual', attr: 'fire' },
+  spell: { cat: 'Tool', line: 'Spell Card', attr: 'spell' },
+  trap: { cat: 'System', line: 'Trap Card', attr: 'trap' },
+};
+const isMonster = k => k !== 'spell' && k !== 'trap';
+// shortcut: kind guessed from the name; the TV build reads ApplicationInfo.category instead
+const kindOf = a => {
+  const k = `${a.pkg} ${a.label}`.toLowerCase();
+  return /tv\.settings/.test(k) ? 'trap' : /music|audio|spotify|radio/.test(k) ? 'effect' : /game|limelight|moonlight|steam|retro/.test(k) ? 'ritual'
+    : /youtube|netflix|plex|video|disney|crave|dazn|crunchyroll|viki|tubi|pluto|player|appletv/.test(k) ? 'normal' : 'spell';
+};
+
+let dirty = true, builtAt = 0;  // card bitmaps are redrawn when an image or font arrives
+function img(src) { const i = new Image(); i.onload = () => { dirty = true; }; i.src = src; return i; }
+const ok = i => i && i.complete && i.naturalWidth > 0;
+const A = Object.fromEntries(['bg', 'back', 'star', 'tab-deck', 'tab-side', 'bar-dark', 'bar-count', 'label-spell', 'label-trap',
+  ...Object.keys(KIND).flatMap(k => [`frame-${k}`, `attr-${KIND[k].attr}`])].map(n => [n, img(`deck/${n}.png`)]));
+
+const params = new URLSearchParams(location.search);
+// Tag partner of the day, Sunday first (deck.html?partner=chazz forces one): name, line on coming Home, line on summoning a
+// monster. Each brings the game's summon movie of their own ace monster (summon-<name>.mp4): Flame Wingman, a Vehicroid,
+// Master of Oz, Cyber Blader, Armed Dragon, Water Dragon, Cyber End Dragon.
+const PARTNERS = [
+  ['jaden', 'Get your game on!', x => `I summon ${x} in attack mode!`],
+  ['syrus', "You're back! Ready when you are.", x => `Go, ${x}! Please work...`],
+  ['chumley', 'Duel later? Grilled cheese first.', x => `${x}! Totally licious!`],
+  ['alexis', "Good to see you. Let's duel.", x => `${x}, take the field!`],
+  ['chazz', 'Chazz it up!', x => `${x}! Now Chazz it up!`],
+  ['bastion', "I've calculated today's best deck.", x => `${x}: the formula is complete.`],
+  ['zane', 'Show me a perfect duel.', x => `${x}. End this.`],
+];
+// Menu settings (kept between visits): the partner, and which of the game's sound effects plays for each action.
+const SOUNDS = [['move', 'Move', 58], ['confirm', 'Confirm', 23], ['page', 'Card', 43], ['splash', 'Home', 3], ['summon', 'Summon', 12]];  // action, label, default clip (the menu shows it +1)
+const SE_COUNT = 59, SETTINGS = 'deck-menu';
+let settings = { partner: 'auto', se: Object.fromEntries(SOUNDS.map(([role, , n]) => [role, n])) };
+try {
+  const saved = JSON.parse(localStorage.getItem(SETTINGS));
+  if (saved) settings = { partner: saved.partner || 'auto', se: { ...settings.se, ...saved.se } };
+} catch (e) { /* nothing saved, or a private window */ }
+const saveSettings = () => { try { localStorage.setItem(SETTINGS, JSON.stringify(settings)); } catch (e) { /* lasts until reload */ } };
+const partner = () => PARTNERS.find(p => p[0] === (params.get('partner') || settings.partner)) || PARTNERS[new Date().getDay()];
+for (const n of ['bubble', 'zone', 'zone-on', 'flare', ...PARTNERS.flatMap(p => [`partner-${p[0]}`, `partner-${p[0]}-shout`])]) A[n] = img(`deck/${n}.png`);
+A.burst = img('deck/burst.jpg');
+// A monster summoned from the Main Deck gets the partner's movie; Side Deck cards get the quick summon only.
+const MOVIE = Object.fromEntries(PARTNERS.map(([name]) => [name,
+  Object.assign(document.createElement('video'), { src: `deck/summon-${name}.mp4`, muted: true, playsInline: true, preload: 'metadata' })]));
+const movieFor = i => i < mainN && isMonster(cards[i].kind) ? MOVIE[partner()[0]] : null;
+// Duel Academy sits behind everything, as day, dusk or night by the clock (deck.html?phase=dusk forces one).
+const phaseAt = h => h >= 7 && h < 17 ? 'day' : (h >= 17 && h < 20) || (h >= 5 && h < 7) ? 'dusk' : 'night';
+const forcedPhase = params.get('phase');
+let phase = '';
+function setPhase(p) { if (p !== phase) { phase = p; A.academy = img(`deck/academy-${p}.jpg`); } }
+
+// Page 1 of the TV launcher (Home.java PINNED) is the Main Deck; every other app is the Side Deck.
+const PINNED = ['com.google.android.youtube.tv', 'com.google.android.youtube.tvmusic', 'com.plexapp.android', 'com.netflix.ninja',
+  'com.amazon.amazonvideo.livingroom', 'com.limelight', 'com.alphainventor.filemanager', 'com.android.vending'];
+const hash = s => [...s].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) >>> 0, 7);
+let cards = [], mainN = 0, sel = 0, appList = [];
+const isSys = a => a.pkg === 'com.android.tv.settings';
+// The deck you arranged with the remote is kept (the TV build would keep it in SharedPreferences). R restores the default.
+const SAVE = 'deck-order';
+function loadSaved() { try { return JSON.parse(localStorage.getItem(SAVE)); } catch (e) { return null; } }
+function saveDeck() { try { localStorage.setItem(SAVE, JSON.stringify({ order: cards.map(a => a.pkg), mainN })); } catch (e) { /* private window: order lasts until reload */ } }
+function setApps(list, saved = loadSaved()) {
+  appList = list;
+  const order = saved && Array.isArray(saved.order) ? saved.order : PINNED;
+  const rank = a => { const i = order.indexOf(a.pkg); return i < 0 ? order.length : i; };
+  list = [...list].sort((a, b) => isSys(a) - isSys(b) || rank(a) - rank(b) || a.label.localeCompare(b.label));
+  const movable = list.filter(a => !isSys(a)).length;
+  mainN = saved ? Math.max(1, Math.min(saved.mainN | 0, COLS, movable)) : list.filter(a => rank(a) < order.length).length || Math.min(COLS, list.length);
+  cards = list.map((a, i) => {
+    const h = hash(a.pkg), kind = kindOf(a);
+    // shortcut: stars and ATK/DEF are made up here; the TV build derives them from how often the app is opened
+    const level = i < mainN ? Math.max(4, 8 - (i >> 1)) : 1 + h % 3;
+    return { ...a, kind, level, atk: level * 300 + h % 5 * 50, def: level * 250 + h % 7 * 50, art: a.banner ? img(a.banner) : null, dx: 0, dy: 0 };
+  });
+  sel = 0; scroll = scrollTo = 0; held = false; dirty = true;
+}
+fetch('banners/apps.json').then(r => r.json()).then(setApps).catch(() => setApps([
+  ['YouTube', 'com.google.android.youtube.tv'], ['YouTube Music', 'com.google.android.youtube.tvmusic'], ['Plex', 'com.plexapp.android'],
+  ['Netflix', 'com.netflix.ninja'], ['Prime Video', 'com.amazon.amazonvideo.livingroom'], ['Moonlight', 'com.limelight'],
+  ['File Manager+', 'com.alphainventor.filemanager'], ['Google Play Store', 'com.android.vending'], ['Just Player', 'com.brouken.player'],
+  ['Timers', 'com.sony.dtv.timers'], ['System', 'com.android.tv.settings']].map(([label, pkg]) => ({ label, pkg }))));
+
+// UI sounds: the game's own effects (deck/se/NN.ogg, the 59 clips at the end of its sound bank). Which clip an action
+// uses can be changed by ear in the menu; the defaults are the ones the owner picked there.
+const clips = {};
+function play(role) {  // browsers block audio until the first key press
+  const n = settings.se[role] % SE_COUNT, a = clips[n] || (clips[n] = new Audio(`deck/se/${String(n).padStart(2, '0')}.ogg`));
+  a.cloneNode().play().catch(() => {});
+}
+
+const clamp01 = v => Math.max(0, Math.min(1, v));
+const out3 = t => 1 - Math.pow(1 - t, 3);
+const lerp = (a, b, k) => a + (b - a) * k;
+
+// ---- one card, drawn once into its own bitmap ----
+function wrap(g, text, x, y, maxW, lh, maxLines) {
+  let line = '', n = 0;
+  for (const word of text.split(' ')) {
+    if (g.measureText(line + word).width > maxW && line) {
+      g.fillText(line.trim(), x, y + n++ * lh); line = '';
+      if (n === maxLines) return;
+    }
+    line += word + ' ';
+  }
+  g.fillText(line.trim(), x, y + n * lh);
+}
+function renderCard(card) {
+  const cvs = document.createElement('canvas'); cvs.width = CW; cvs.height = CH;
+  const g = cvs.getContext('2d'), kind = KIND[card.kind], monster = isMonster(card.kind);
+  // art window (the frame's opening is 312 square at 60,136): the banner, whole, over a blurred copy of itself
+  g.fillStyle = '#0b0e18'; g.fillRect(52, 128, 328, 328);
+  if (ok(card.art)) {
+    const a = card.art, wide = a.naturalWidth / a.naturalHeight > 1.4;
+    g.save(); g.beginPath(); g.rect(56, 132, 320, 320); g.clip();
+    g.filter = 'blur(18px) brightness(.6)';
+    const s = 330 / Math.min(a.naturalWidth, a.naturalHeight);
+    g.drawImage(a, 216 - a.naturalWidth * s / 2, 292 - a.naturalHeight * s / 2, a.naturalWidth * s, a.naturalHeight * s);
+    g.filter = 'none';
+    const w = wide ? 320 : 200, h = w * a.naturalHeight / a.naturalWidth;
+    g.drawImage(a, 216 - w / 2, 292 - h / 2, w, h);
+    g.restore();
+  } else {
+    g.fillStyle = '#fff'; g.font = `600 44px ${UI}`; g.textAlign = 'center'; g.fillText(card.label, 216, 304, 290);
+  }
+  if (ok(A[`frame-${card.kind}`])) g.drawImage(A[`frame-${card.kind}`], 0, 0);
+  g.fillStyle = '#16110a'; g.textAlign = 'left';
+  g.font = `700 46px ${NAME}`; g.fillText(card.label, 44, 74, 290);  // long names squeeze, like the real cards
+  const orb = A[`attr-${kind.attr}`]; if (ok(orb)) g.drawImage(orb, 344, 30, 54, 56);
+  if (monster) { if (ok(A.star)) for (let i = 0; i < card.level; i++) g.drawImage(A.star, 366 - i * 32, 96, 30, 33); }
+  else { const l = A[`label-${card.kind}`]; if (ok(l)) g.drawImage(l, 396 - l.naturalWidth * 1.1, 99, l.naturalWidth * 1.1, l.naturalHeight * 1.1); }
+  // text box (inner area 38..396 x 478..580)
+  let y = 504;
+  if (monster) { g.font = `700 25px ${NAME}`; g.fillText(`[${kind.cat} / ${kind.line}]`, 46, y); y += 24; }
+  g.font = `19px ${TEXT}`;
+  wrap(g, `Press OK to ${monster ? 'Special Summon' : 'activate'} ${card.label}.`, 46, y, 340, 22, monster ? 2 : 3);
+  if (monster) {
+    g.font = `600 25px ${UI}`; g.textAlign = 'right';
+    g.fillText(`ATK/${String(card.atk).padStart(4)}  DEF/${String(card.def).padStart(4)}`, 390, 574);
+  }
+  return cvs;
+}
+function rebuild(now) {
+  for (const card of cards) {
+    card.bmp = renderCard(card);
+    card.mini = document.createElement('canvas'); card.mini.width = MINI_W; card.mini.height = MINI_H;  // grid copy, sized for the selection pop
+    card.mini.getContext('2d').drawImage(card.bmp, 0, 0, MINI_W, MINI_H);
+  }
+  dirty = false; builtAt = now;
+}
+
+// ---- grid geometry: row 0 is the Main Deck, rows 1.. are the Side Deck ----
+let scroll = 0, scrollTo = 0;  // first visible Side Deck row
+const rowOf = i => i < mainN ? 0 : 1 + Math.floor((i - mainN) / COLS);
+const colOf = i => i < mainN ? i : (i - mainN) % COLS;
+const rowStart = r => r === 0 ? 0 : mainN + (r - 1) * COLS;
+const rowLen = r => r === 0 ? mainN : Math.min(COLS, cards.length - rowStart(r));
+const rows = () => 1 + Math.ceil((cards.length - mainN) / COLS);
+const slotXY = i => [GX + colOf(i) * (MW + GAP), rowOf(i) === 0 ? DECK_Y : SIDE_Y + (rowOf(i) - 1 - scroll) * ROW];
+
+let deal = 0, pop = 1, last = 0, confirmT = -1, launching = null;
+let held = false;                 // carrying the selected card to another place in the deck
+let movie = null, movieOn = false;  // summon movie for this summon, and whether it is on screen
+let landed = false;               // the summoned card has reached the field (its sound has played)
+
+function drawBackground(t) {
+  const island = ok(A.academy);
+  if (island) c.drawImage(A.academy, 0, 0, W, H); else { c.fillStyle = '#3a0a12'; c.fillRect(0, 0, W, H); }
+  if (!ok(A.bg)) return;
+  if (!drawBackground.tiled) {  // the game's red cloud tile, laid out once with a tile to spare, then drifted
+    const b = drawBackground.tiled = document.createElement('canvas'), n = A.bg.naturalWidth;
+    b.width = W + n; b.height = H + n;
+    const g = b.getContext('2d'); g.fillStyle = g.createPattern(A.bg, 'repeat'); g.fillRect(0, 0, b.width, b.height);
+  }
+  const n = A.bg.naturalWidth;
+  c.globalAlpha = island ? .3 : 1;  // over the island the clouds are only a red haze
+  c.drawImage(drawBackground.tiled, Math.floor(t * 14 % n) - n, Math.floor(t * 8 % n) - n);
+  c.globalAlpha = 1;
+}
+
+function text(str, x, y, font, color, align = 'left', maxW) {
+  c.font = font; c.fillStyle = color; c.textAlign = align; c.fillText(str, x, y, maxW);
+}
+
+// A deck window: the pack's tab on a cream body with a coloured edge and footer, like the game's Deck / Side boxes.
+function drawWindow(tab, x, y, w, bodyH, dark, light, count, note) {
+  const th = ok(tab) ? tab.naturalHeight : 58, by = y + th - 2;
+  c.fillStyle = 'rgba(255,249,229,.8)'; c.fillRect(x + 6, by + 6, w - 12, bodyH - 3);  // a little see-through, for the island
+  c.lineWidth = 3; c.strokeStyle = dark; c.strokeRect(x + 1.5, by + 1.5, w - 3, bodyH + 37);
+  c.strokeStyle = light; c.strokeRect(x + 4.5, by + 4.5, w - 9, bodyH + 31);
+  const g = c.createLinearGradient(0, by + bodyH, 0, by + bodyH + 34); g.addColorStop(0, dark); g.addColorStop(1, light);
+  c.fillStyle = g; c.fillRect(x + 6, by + bodyH + 3, w - 12, 31);
+  text(note, x + w - 20, by + bodyH + 27, `600 26px ${UI}`, '#fff', 'right');
+  if (ok(tab)) c.drawImage(tab, x, y);
+  text(String(count).padStart(2, '0'), x + 185, y + 46, `600 34px ${UI}`, '#2a2018', 'center');
+}
+
+function drawChrome(day, time, intro) {
+  c.save(); c.globalAlpha = intro; c.translate(0, (1 - intro) * -30);  // the game's two bars, at 60%, on the Deck tab's line
+  if (ok(A['bar-dark'])) c.drawImage(A['bar-dark'], 1177, 12, 329, 58);
+  text(`${day}   ${time}`, 1224, 50, `600 26px ${UI}`, '#fff3d6');
+  if (ok(A['bar-count'])) c.drawImage(A['bar-count'], 1518, 12, 362, 58);
+  text(String(cards.length), 1819, 49, `600 26px ${UI}`, '#2a2018', 'center');  // lands in the bar's white box
+  c.restore();
+  c.save(); c.globalAlpha = intro;
+  drawWindow(A['tab-deck'], WX, DECK_TAB, WW, MH + 24, '#d92c66', '#ff86ad', mainN, 'MAIN DECK');
+  const sideRows = rows() - 1, sideH = SIDE_ROWS * ROW + 12;
+  drawWindow(A['tab-side'], WX, SIDE_TAB, WW, sideH, '#0a63d8', '#6fb7f5', cards.length - mainN,
+    sideRows > SIDE_ROWS ? `SIDE DECK   ROW ${scrollTo + 1}-${scrollTo + SIDE_ROWS} / ${sideRows}` : 'SIDE DECK');
+  text(held ? '← ↑ ↓ →  MOVE CARD   ·   OK  DROP' : 'OK  SUMMON   ·   HOLD OK  MOVE CARD   ·   BACK  MENU', WX + 20, SIDE_TAB + 59 + sideH + 27, `600 26px ${UI}`, '#fff');
+  c.restore();
+}
+
+function foil(x, y, w, h, t, speed) {  // light sweeping across a card
+  const ph = clamp01((t * speed % 1) * 1.8), x0 = x - w + 2.4 * w * ph;
+  const g = c.createLinearGradient(x0, y + h, x0 + w * .8, y);
+  g.addColorStop(0, 'rgba(255,255,255,0)'); g.addColorStop(.5, 'rgba(255,255,255,.34)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+  c.save(); c.beginPath(); c.rect(x, y, w, h); c.clip(); c.globalCompositeOperation = 'lighter'; c.fillStyle = g; c.fillRect(x, y, w, h); c.restore();
+}
+
+function drawGridCard(i, t) {
+  const card = cards[i], p = clamp01((deal - .25 - i * .045) / .42);
+  if (p <= 0 || !card.bmp) return;
+  const sideRow = rowOf(i) - 1;
+  if (sideRow >= 0 && (sideRow <= scroll - 1 || sideRow >= scroll + SIDE_ROWS)) return;
+  const [sx, sy] = slotXY(i), x = sx + card.dx, y = sy + card.dy;  // dx/dy: still sliding in from where it was before a move
+  const e = out3(p), on = i === sel && p === 1 && confirmT < 0, lift = on ? out3(pop) : 0, carried = on && held;
+  const flip = p < .5 ? 1 - 2 * p : 2 * p - 1, s = 1 + (POP - 1) * lift + (carried ? .07 : 0);  // dealt face down, turns over on the way
+  const top = (rowOf(i) === 0 ? DECK_TAB : SIDE_TAB) + 62;               // the grown card stays below its window's tab
+  const cx = lerp(PILE[0], x + MW / 2, e), cy = Math.max(lerp(PILE[1], y + MH / 2, e), on ? top + MH * s / 2 : -1e9);
+  c.save(); c.translate(cx, cy); c.rotate((1 - e) * .7 + (carried ? -.04 + .02 * Math.sin(t * 5) : 0)); c.scale(Math.max(.02, flip) * s, s);
+  if (on) { const o = carried ? 2 : 1; c.fillStyle = 'rgba(0,0,0,.35)'; c.fillRect(-MW / 2 + 8 * o, -MH / 2 + 12 * o, MW, MH); }  // flat shadow: blurred ones cost frames
+  c.drawImage(p < .5 && ok(A.back) ? A.back : card.mini, -MW / 2, -MH / 2, MW, MH);
+  if (on) {
+    foil(-MW / 2, -MH / 2, MW, MH, t, .45);
+    c.lineWidth = carried ? 9 : 6; c.strokeStyle = `rgba(255,${carried ? 138 : 230},0,${.7 + .3 * Math.sin(t * 6)})`;  // the game's yellow cursor; orange while carrying
+    c.strokeRect(-MW / 2 - 6, -MH / 2 - 6, MW + 12, MH + 12);
+  }
+  c.restore();
+}
+
+// OK: the screen turns into a duel. The card lands above a monster zone in the pre-duel burst, then the app opens.
+function drawSummon(t) {
+  const card = cards[sel];
+  if (confirmT < 0 || !card.bmp) return;  // no bitmap yet: OK was pressed before the cards finished loading
+  const k = out3(clamp01(confirmT / .4)), [x, y] = slotXY(sel), mx = W / 2, my = H * .43;
+  c.fillStyle = `rgba(4,6,20,${.95 * k})`; c.fillRect(0, 0, W, H);
+  if (ok(A.burst)) {
+    if (!drawSummon.burst) {  // scaled once to the screen: rescaling or turning it every frame cost 40 ms
+      const b = drawSummon.burst = document.createElement('canvas'); b.width = W; b.height = H;
+      b.getContext('2d').drawImage(A.burst, mx - 1000, my - 1000, 2000, 2000);
+    }
+    c.save(); c.globalCompositeOperation = 'lighter'; c.globalAlpha = k * (.72 + .08 * Math.sin(t * 5));
+    c.drawImage(drawSummon.burst, 0, 0); c.restore();
+  }
+  // five monster zones seen at an angle; the middle one lights up once the card has landed
+  c.save(); c.globalAlpha = k; c.translate(mx, H * .84); c.scale(1, .36);
+  for (let i = -2; i <= 2; i++) if (ok(A.zone)) c.drawImage(A.zone, i * 270 - 125, -125, 250, 250);
+  if (confirmT > .4 && ok(A['zone-on'])) { c.globalAlpha = k * (.6 + .4 * Math.sin(t * 8)); c.drawImage(A['zone-on'], -125, -125, 250, 250); }
+  c.restore();
+  // monsters arrive face up; spells and traps arrive face down, then flip
+  const w = lerp(MW, CW, k), h = w * CH / CW, set = !isMonster(card.kind);
+  const turn = set ? clamp01((confirmT - .45) / .3) : 1, faceUp = turn > .5 || !ok(A.back);
+  c.save(); c.translate(lerp(x + MW / 2, mx, k), lerp(y + MH / 2, my, k)); c.scale(Math.max(.02, Math.abs(1 - 2 * turn)), 1);
+  c.drawImage(faceUp ? card.bmp : A.back, -w / 2, -h / 2, w, h); c.restore();
+  const f = clamp01(1 - Math.abs(confirmT - .45) / .25);  // lens flare as it lands
+  if (f > 0 && ok(A.flare)) {
+    c.save(); c.globalCompositeOperation = 'lighter'; c.globalAlpha = f; c.drawImage(A.flare, mx - 512, my - 512, 1024, 1024); c.restore();
+  }
+  if (movieOn && movie.readyState >= 2) {  // the game's summon movie, over everything; OK skips it
+    c.save(); c.globalAlpha = clamp01(movie.currentTime / .25); c.fillStyle = '#000'; c.fillRect(0, 0, W, H);
+    c.drawImage(movie, 0, 0, W, H); c.restore();
+    text('OK  SKIP', W - 40, H - 30, `600 28px ${UI}`, 'rgba(255,255,255,.8)', 'right');
+  }
+  if (launching) text(`(prototype) the TV would now open ${launching}`, mx, H * .97, `600 40px ${UI}`, '#fff', 'center');
+}
+function summon() {
+  if (!cards[sel].bmp) return;
+  confirmT = 0; landed = false; movie = movieFor(sel); play('confirm'); speak(summonLine(cards[sel]), true);
+}
+function endMovie() { if (movieOn) { movieOn = false; movie.pause(); movie = null; confirmT = .9; } }
+for (const v of Object.values(MOVIE)) v.addEventListener('ended', endMovie);
+
+// Partner cut-in: today's partner slides in with a line, like the game's duel cut-ins, and leaves again.
+const HOLD = 2.8;
+let line = '', loud = false, spoke = HOLD;
+function speak(str, shouting) { line = str; loud = !!shouting; spoke = 0; }
+const greeting = () => partner()[1];
+const summonLine = card => isMonster(card.kind) ? partner()[2](card.label) : card.kind === 'spell' ? `I activate ${card.label}!` : `I flip my face-down: ${card.label}!`;
+function drawPartner() {
+  if (spoke >= HOLD) return;
+  const k = out3(clamp01(spoke / .25)) * clamp01((HOLD - spoke) / .25), face = A[`partner-${partner()[0]}${loud ? '-shout' : ''}`], size = 230;
+  const x = (confirmT >= 0 ? 110 : 30) - (1 - k) * 340, y = confirmT >= 0 ? H * .32 : H - size - 14;  // beside the summoned card, else bottom-left
+  c.save(); c.globalAlpha = k;
+  if (ok(face)) c.drawImage(face, x, y, size, size);
+  // the game's speech bubble, stretched in the middle to fit the line; its tail points down at the face
+  c.font = `600 34px ${UI}`;
+  const S = 1.4, bw = Math.max(c.measureText(line).width + 64, 110 * S), bx = x + 60, by = y - 92 * S + 26, b = A.bubble;
+  if (ok(b)) {
+    c.drawImage(b, 0, 0, 70, 92, bx, by, 70 * S, 92 * S);
+    c.drawImage(b, 70, 0, 30, 92, bx + 70 * S - 1, by, bw - 96 * S + 2, 92 * S);
+    c.drawImage(b, 100, 0, 26, 92, bx + bw - 26 * S, by, 26 * S, 92 * S);
+  }
+  text(line, bx + bw / 2, by + 34 * S + 12, `600 34px ${UI}`, '#2a2018', 'center');
+  c.restore();
+}
+
+// Menu (Back on the remote; M or Esc here): up/down picks a row, left/right changes it, OK on Theme switches theme.
+const THEMES = [['Duel Academy', null], ['Persona', 'index.html']];  // name, page of that theme's prototype
+const partnerChoices = ['auto', ...PARTNERS.map(p => p[0])], cap = str => str[0].toUpperCase() + str.slice(1);
+let menu = false, menuRow = 0, themeAt = 0;
+const menuRows = () => [
+  ['PARTNER', settings.partner === 'auto' ? `By day: ${cap(partner()[0])}` : cap(settings.partner)],
+  ['THEME', THEMES[themeAt][0] + (THEMES[themeAt][1] ? '  (OK to switch)' : '')],
+  ...SOUNDS.map(([role, label]) => [`SOUND: ${label.toUpperCase()}`, `Clip ${settings.se[role] + 1} of ${SE_COUNT}`]),
+];
+function menuChange(d) {
+  const step = (i, n) => (i + d + n) % n;
+  if (menuRow === 0) { settings.partner = partnerChoices[step(partnerChoices.indexOf(settings.partner), partnerChoices.length)]; play('move'); speak(greeting()); }
+  else if (menuRow === 1) { themeAt = step(themeAt, THEMES.length); play('move'); }
+  else { const role = SOUNDS[menuRow - 2][0]; settings.se[role] = step(settings.se[role], SE_COUNT); play(role); }  // hear it as you choose
+  saveSettings();
+}
+function drawMenu(t) {
+  if (!menu) return;
+  c.fillStyle = 'rgba(8,3,14,.84)'; c.fillRect(0, 0, W, H);
+  text('MENU', W / 2, 104, `600 64px ${UI}`, '#fff3d6', 'center');
+  const bar = A['bar-dark'], x = 460, w = 1000;
+  menuRows().forEach(([label, value], i) => {
+    const y = 142 + i * 106, on = i === menuRow;
+    if (ok(bar)) {  // the game's dark bar, stretched in the middle
+      c.drawImage(bar, 0, 0, 70, 96, x, y, 70, 96); c.drawImage(bar, 70, 0, 440, 96, x + 70, y, w - 108, 96); c.drawImage(bar, 510, 0, 38, 96, x + w - 38, y, 38, 96);
+    }
+    text(label, x + 92, y + 61, `600 36px ${UI}`, '#fff3d6');
+    text(on ? `◀  ${value}  ▶` : value, x + w - 44, y + 61, `600 36px ${UI}`, on ? '#ffe600' : '#d8c6a0', 'right');
+    if (on) { c.lineWidth = 6; c.strokeStyle = `rgba(255,230,0,${.7 + .3 * Math.sin(t * 6)})`; c.strokeRect(x - 8, y - 6, w + 16, 108); }
+  });
+  text('↑ ↓  ROW   ·   ← →  CHANGE   ·   BACK  CLOSE', W / 2, 142 + 7 * 106 + 50, `600 30px ${UI}`, '#fff', 'center');
+}
+function menuKey(e) {
+  if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { menuRow = (menuRow + (e.key === 'ArrowUp' ? -1 : 1) + 2 + SOUNDS.length) % (2 + SOUNDS.length); play('move'); }
+  else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+    if (e.repeat && performance.now() - lastMoveAt < 2 * REPEAT_MS) return;
+    lastMoveAt = performance.now(); menuChange(e.key === 'ArrowLeft' ? -1 : 1);
+  }
+  else if (e.key === 'Enter' && !e.repeat) { okUsed = true; if (menuRow === 1 && THEMES[themeAt][1]) location.href = THEMES[themeAt][1]; }
+}
+
+let clockAt = 0, day = '', time = '';
+function tickClock(ms) {
+  if (ms - clockAt < 1000) return; clockAt = ms; const d = new Date(ms);
+  day = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  setPhase(forcedPhase || phaseAt(d.getHours()));
+}
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (now - last < 1000 / 60 - 2) return;      // cap at 60fps (TV UI refresh) even on faster monitors
+  const dt = last ? Math.min(.1, (now - last) / 1000) : 0; last = now;
+  const t = (now % 3600000) / 1000;
+  deal += dt; spoke += dt; pop = Math.min(1, pop + dt * 7); scroll += (scrollTo - scroll) * Math.min(1, dt * 14);
+  if (Math.abs(scroll - scrollTo) < .002) scroll = scrollTo;
+  if (dirty && now - builtAt > 150) rebuild(now);
+  if (confirmT >= 0) {
+    if (!movieOn) confirmT += dt;
+    if (confirmT > .4 && !landed) { landed = true; play('summon'); }
+    if (movie && !movieOn && confirmT > .75) { movieOn = true; movie.currentTime = 0; movie.play().catch(endMovie); }
+    if (confirmT > .9 && !launching) launching = cards[sel].label;   // device: startActivity() here
+    if (confirmT > 2.2) { confirmT = -1; launching = null; deal = 0; pop = 0; play('splash'); speak(greeting()); }  // simulate coming back home
+  }
+  const ease = Math.exp(-dt * 16); for (const card of cards) { card.dx *= ease; card.dy *= ease; }
+  tickClock(Date.now());
+  const intro = out3(clamp01(deal / .45));
+  drawBackground(t); drawChrome(day, time, intro);
+  const scrolling = scroll !== scrollTo;
+  if (scrolling) { c.save(); c.beginPath(); c.rect(WX, 0, WW, DECK_Y + MH + 30); c.rect(WX, SIDE_Y - 10, WW, SIDE_ROWS * ROW + 8); c.clip(); }
+  for (let i = 0; i < cards.length; i++) if (i !== sel) drawGridCard(i, t);
+  if (scrolling) c.restore();
+  drawGridCard(sel, t); drawSummon(t); drawMenu(t); drawPartner();
+  if (deal > 1.5 && !ok(A['frame-normal'])) {  // fresh clone: the game's art is not in the repository
+    c.fillStyle = 'rgba(8,3,14,.9)'; c.fillRect(0, H / 2 - 110, W, 220);
+    text('The game art, sounds and movies are not included.', W / 2, H / 2 - 20, `600 48px ${UI}`, '#fff3d6', 'center');
+    text('Build them from your own copy:  launcher/prototype/deck/make_assets.py <Tag Force ISO> <HD pack>/ULUS10136', W / 2, H / 2 + 50, `500 34px ${UI}`, '#fff', 'center');
+  }
+}
+
+// Held keys auto-repeat ~30x/s: repeats move the cursor at most every REPEAT_MS, and a sound plays at most every SOUND_MS.
+const REPEAT_MS = 110, SOUND_MS = 150;
+let lastMoveAt = 0, lastSoundAt = 0;
+function go(dx, dy, repeat) {
+  const now = performance.now();
+  if (repeat && now - lastMoveAt < REPEAT_MS) return;
+  lastMoveAt = now;
+  let next;
+  if (dx) next = (sel + dx + cards.length) % cards.length;  // left/right run on into the next row
+  else {
+    const r = rowOf(sel) + dy; if (r < 0 || r >= rows()) return;
+    next = rowStart(r) + Math.min(colOf(sel), rowLen(r) - 1);
+  }
+  if (next === sel) return;
+  sel = next; pop = 0;
+  const paged = follow();
+  if (paged || now - lastSoundAt >= SOUND_MS) { play(paged ? 'page' : 'move'); lastSoundAt = now; }
+}
+function follow() {  // keep the selected Side Deck row on screen
+  const sideRow = rowOf(sel) - 1, before = scrollTo;
+  scrollTo = sideRow < 0 ? 0 : Math.max(Math.min(scrollTo, sideRow), sideRow - SIDE_ROWS + 1);
+  return scrollTo !== before;
+}
+
+// Deck editing: hold OK to pick the selected card up, arrows carry it, OK puts it down. The Deck holds up to COLS cards:
+// carrying a card into a full Deck swaps it with the one in that place. System stays the last card.
+const HOLD_MS = 450;
+function pickUp() {
+  if (isSys(cards[sel])) { play('move'); speak('That one stays where it is.'); return; }
+  held = true; pop = 0; play('page'); speak('Where does this one go?');
+}
+function drop() {
+  held = false; pop = 0; play('page'); saveDeck();
+  speak(`${cards[sel].label} ${rowOf(sel) === 0 ? 'joins the Main Deck!' : 'waits in the Side Deck.'}`);
+}
+function moveHeld(dx, dy) {
+  const end = cards.length - (isSys(cards[cards.length - 1]) ? 1 : 0);  // cards 0..end-1 can move
+  const was = new Map(cards.map((card, i) => [card, slotXY(i)])), r = rowOf(sel), col = colOf(sel);
+  const swap = t => { [cards[sel], cards[t]] = [cards[t], cards[sel]]; sel = t; };
+  const moveTo = t => { cards.splice(t, 0, cards.splice(sel, 1)[0]); sel = t; };
+  if (dx) {
+    const t = sel + dx; if (t < 0 || t >= end || rowOf(t) !== r) return;
+    swap(t);
+  } else if (dy < 0) {
+    if (r === 0) return;
+    if (r > 1) swap(sel - COLS);
+    else if (mainN < COLS) { moveTo(Math.min(col, mainN)); mainN++; }  // room in the Deck: it grows
+    else swap(col);
+  } else if (r === 0) {
+    if (mainN <= 1) return;                                           // the Deck keeps at least one card
+    mainN--; moveTo(mainN + Math.min(col, end - 1 - mainN));
+  } else {
+    const t = sel + COLS;
+    if (t < end) swap(t); else if (rowOf(end - 1) > r) moveTo(end - 1); else return;
+  }
+  follow(); play('move');
+  cards.forEach((card, i) => { const [x, y] = slotXY(i), [ox, oy] = was.get(card); card.dx += ox - x; card.dy += oy - y; });
+}
+
+let okTimer = 0, okUsed = true;  // okUsed: this press of OK already did something (picked up, dropped, skipped)
+addEventListener('keydown', e => {
+  if (!cards.length) return;
+  if (confirmT >= 0) { if (e.key === 'Enter' && !e.repeat) { okUsed = true; endMovie(); } return e.preventDefault(); }
+  if (['m', 'M', 'Escape', 'Backspace'].includes(e.key)) { if (!held && !e.repeat) { menu = !menu; play('page'); } return e.preventDefault(); }
+  if (menu) { menuKey(e); return e.preventDefault(); }
+  const arrow = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] }[e.key];
+  if (arrow) held ? (e.repeat && performance.now() - lastMoveAt < REPEAT_MS) || (lastMoveAt = performance.now(), moveHeld(...arrow)) : go(...arrow, e.repeat);
+  else if (e.key === 'Enter') {
+    if (e.repeat) return e.preventDefault();
+    if (held) { okUsed = true; drop(); }
+    else { okUsed = false; okTimer = setTimeout(() => { okUsed = true; pickUp(); }, HOLD_MS); }
+  }
+  else if (e.key === 'h' || e.key === 'H') { deal = 0; sel = 0; scroll = scrollTo = 0; pop = 0; held = false; play('splash'); speak(greeting()); }
+  else if (e.key === 'r' || e.key === 'R') { try { localStorage.removeItem(SAVE); } catch (err) { /* nothing saved */ } setApps(appList, null); deal = 0; play('splash'); }
+  else return;
+  e.preventDefault();
+});
+addEventListener('keyup', e => {
+  if (e.key !== 'Enter') return;
+  clearTimeout(okTimer);
+  if (!okUsed && confirmT < 0) { okUsed = true; summon(); }  // a short press summons
+});
+Promise.all([document.fonts.load(`700 40px ${NAME}`), document.fonts.load(`600 40px ${UI}`)]).then(() => { dirty = true; requestAnimationFrame(frame); play('splash'); speak(greeting()); });
+
+// Self-check (open deck.html#test): grid navigation maps rows and columns the way the layout draws them.
+if (location.hash === '#test') {
+  setApps(Array.from({ length: 21 }, (_, i) => ({ label: `App ${i}`, pkg: i < 8 ? PINNED[i] : i === 20 ? 'com.android.tv.settings' : `x.app${i}` })), null);
+  console.assert(mainN === 8 && rows() === 3 && rowLen(2) === 5, 'rows');
+  sel = 7; go(0, 1); console.assert(sel === 15, 'down keeps the column', sel);
+  go(0, 1); console.assert(sel === 20, 'down clamps to a short row', sel);
+  go(1, 0); console.assert(sel === 0 && scrollTo === 0, 'right wraps to the first card', sel);
+  // carrying cards: into a full Deck swaps, out of it shrinks the Deck, back into the gap grows it; System never moves
+  sel = 8; held = true; const moved = cards[8];
+  moveHeld(0, -1); console.assert(sel === 0 && cards[0] === moved && mainN === 8, 'swap into a full deck', sel);
+  moveHeld(0, 1); console.assert(sel === 7 && mainN === 7 && cards[7] === moved, 'down leaves the deck', sel, mainN);
+  moveHeld(0, -1); console.assert(sel === 0 && mainN === 8 && cards[0] === moved, 'up fills the gap', sel, mainN);
+  sel = 19; moveHeld(1, 0); console.assert(sel === 19 && isSys(cards[20]), 'System stays last', sel);
+  held = false;
+  console.log('deck self-check done');
+}
+</script>
+</body>
+</html>

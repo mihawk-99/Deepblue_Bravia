@@ -103,6 +103,32 @@ python3 -m http.server 8792 --bind 127.0.0.1 --directory launcher
 Then open <http://localhost:8792/prototype/>. Arrow keys and Enter drive it. `TV=<tv-ip>:5555
 launcher/prototype/pull_banners.sh` copies your TV's real app list and banners into it.
 
+### Deck editor theme (prototype)
+
+`launcher/prototype/deck.html` is a second theme, so far in the browser only: your apps are cards in the deck editor of
+Yu-Gi-Oh! GX Tag Force (PSP). Pinned apps are the Deck, the rest the Side Deck; OK summons a card, a tag partner
+comments, and Duel Academy sits behind it all by time of day.
+
+None of the game's art, sounds or movies is in this repository. Build them from your own copy of the game and the
+[TFHD-2022 HD texture pack](https://forums.ppsspp.org/showthread.php?tid=28535) (needs Pillow, `7z` and `ffmpeg`; about
+two minutes, 21 MB, ignored by git):
+
+```bash
+launcher/prototype/deck/make_assets.py "<Tag Force ISO>" "<HD pack>/ULUS10136"
+```
+
+Then open <http://localhost:8792/prototype/deck.html> from the same server as above.
+
+| Key | Does |
+|---|---|
+| Arrows | choose a card |
+| Enter | summon it (a monster from the Deck plays the partner's summon movie; Enter skips) |
+| Hold Enter | pick the card up; arrows move it between and inside the decks, Enter drops it |
+| M or Esc | menu: partner, theme, and which of the game's sounds each action uses (Back on a remote) |
+| R / H | default deck / replay coming Home |
+
+The script is tested with the European ISO. The DeepBlue prototype has the same M / Esc menu to switch theme.
+
 ### Sounds
 
 `launcher/make_sounds.py` synthesizes the four UI sounds into `launcher/res/raw/` with the standard library only.
@@ -122,7 +148,9 @@ launcher/prototype/pull_banners.sh` copies your TV's real app list and banners i
   (the license texts sit next to the fonts in `launcher/assets/fonts/`).
 - The Makoto Yuki clip in `launcher/tv-media/` is footage from Persona 3 Reload (© ATLUS / SEGA), smoothed to 60 fps
   and included as fan use. It is not covered by the MIT license.
+- The deck editor theme uses nothing of Konami's from this repository: `make_assets.py` builds its files on your
+  machine from your own game and from chrisfand's TFHD-2022 texture pack.
 - Everything else: MIT, see `LICENSE`.
 
-This project is not affiliated with Sony, Google, ATLUS or SEGA. BRAVIA, Google TV and Persona are their owners'
-trademarks.
+This project is not affiliated with Sony, Google, ATLUS, SEGA or Konami. BRAVIA, Google TV, Persona and Yu-Gi-Oh! are
+their owners' trademarks.
