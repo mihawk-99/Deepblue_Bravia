@@ -7,9 +7,9 @@ home network. No root.
 
 - **`debloat.sh`** removes or disables the preinstalled apps and background services you don't use, and makes the
   system animations a little faster. Every change is undoable.
-- **DeepBlue** (`launcher/`) is a home screen that replaces Google TV's: a vertical, slanted app menu over animated
-  water with a live preview of each app's banner, UI sounds, and an entrance animation. It holds 60 fps on the TV and
-  draws nothing when an app is open.
+- **DeepBlue** (`launcher/`) is a home screen that replaces Google TV's, styled after the Persona 3 Reload menu: a
+  vertical, slanted app menu over a Makoto Yuki clip, with a live preview of each app's banner, UI sounds, and an
+  entrance animation. It holds 60 fps on the TV and draws nothing when an app is open.
 
 Tested on a **Sony A80CJ** (MediaTek MT5895, Android 12 Google TV). Other BRAVIAs on Google TV with Android 12
 or newer are expected to work but have not been tested; please open an issue with your model either way.
@@ -80,14 +80,15 @@ On the remote: up and down select, left and right change page, OK opens the app.
 `build.sh` signs with a debug key it creates as `launcher/debug.keystore` (ignored by git). Keep it: an update must be
 signed with the same key to install over the app.
 
-### Your own background art
+### Background
 
-DeepBlue draws its own animated water. You can put your own picture or video behind the menu; nothing of the kind is
-included here. Use only media you have the right to use, and don't commit it (these paths are ignored by git):
+The Makoto Yuki clip comes with the repo: `launcher/tv-media/art.intro.mp4` plays once on each return home and
+`art.loop.mp4` loops after it. `install.sh` copies both to the TV.
 
-- **Video:** `art.intro.mp4` (plays once on each return home) and `art.loop.mp4` (loops after it), 1080p, ideally
-  60 fps. Put them in `launcher/tv-media/` and `install.sh` copies them to the TV. The menu starts on the intro's
-  first frame and slides in about 0.2 s later.
+- **Your own video:** replace those two files (1080p, ideally 60 fps). The menu starts on the intro's first frame and
+  slides in about 0.2 s later.
+- **No video:** delete them before installing, and DeepBlue draws its own animated water instead. If they are already
+  on the TV: `adb shell rm /sdcard/Android/data/com.deepblue.shell/files/art.*.mp4`.
 - **Picture:** `art.webp` or `art.png` (animated WebP works), shown on the left over the water. Copy it to
   `/sdcard/Android/data/com.deepblue.shell/files/` on the TV.
 
@@ -119,6 +120,9 @@ launcher/prototype/pull_banners.sh` copies your TV's real app list and banners i
 - Fonts: [Kanit](https://github.com/google/fonts/tree/main/ofl/kanit) and
   [Barlow Condensed](https://github.com/google/fonts/tree/main/ofl/barlowcondensed), under the SIL Open Font License
   (the license texts sit next to the fonts in `launcher/assets/fonts/`).
+- The Makoto Yuki clip in `launcher/tv-media/` is footage from Persona 3 Reload (© ATLUS / SEGA), smoothed to 60 fps
+  and included as fan use. It is not covered by the MIT license.
 - Everything else: MIT, see `LICENSE`.
 
-This project is not affiliated with Sony or Google. BRAVIA and Google TV are their owners' trademarks.
+This project is not affiliated with Sony, Google, ATLUS or SEGA. BRAVIA, Google TV and Persona are their owners'
+trademarks.

@@ -82,14 +82,14 @@ function slot(names) {
 }
 const art = slot(['art.webp', 'art.png']), scene = slot(['bg.jpg', 'bg.png', 'bg.webp']);
 
-// Video slot: art.intro.mp4 plays once on open, then art.loop.mp4 loops. When present it replaces the
-// procedural water, slab and splash entirely; the menu is drawn on top like the reference layering.
+// Video slot, the same files install.sh sends to the TV: art.intro.mp4 plays once on open, then art.loop.mp4
+// loops. When present it replaces the procedural water, slab and splash entirely; the menu is drawn on top.
 function vid(src, loop) {
   const v = document.createElement('video');
   Object.assign(v, { src, loop, muted: true, playsInline: true, preload: 'auto' }); v.ok = false;
   v.addEventListener('loadeddata', () => { v.ok = true; }); return v;
 }
-const vIntro = vid('art.intro.mp4', false), vLoop = vid('art.loop.mp4', true);
+const vIntro = vid('../tv-media/art.intro.mp4', false), vLoop = vid('../tv-media/art.loop.mp4', true);
 let vActive = null;
 const hasVideo = () => vIntro.ok && vLoop.ok;
 function restartVideo() {
