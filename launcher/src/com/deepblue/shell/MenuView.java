@@ -31,6 +31,7 @@ import java.util.Locale;
 class MenuView extends View {
     static class App {
         String label, pkg;
+        String name;  // the label as the app spells it (label is upper case, for the Persona menu)
         Drawable art;
         Intent intent;
         int launches;

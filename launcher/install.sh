@@ -31,6 +31,11 @@ adb shell am start -W -n com.deepblue.shell/.Home >/dev/null  # first start crea
 if [ -f tv-media/art.intro.mp4 ] && [ -f tv-media/art.loop.mp4 ]; then
   adb push tv-media/art.intro.mp4 tv-media/art.loop.mp4 /sdcard/Android/data/com.deepblue.shell/files/
 fi
+# Deck theme: its page, plus the game files make_assets.py built (if you built them). Back twice on the remote switches to it.
+if [ -f prototype/deck/bg.png ]; then
+  adb shell mkdir -p /sdcard/Android/data/com.deepblue.shell/files/web
+  adb push prototype/deck.html prototype/deck /sdcard/Android/data/com.deepblue.shell/files/web/
+fi
 adb shell cmd role add-role-holder android.app.role.HOME com.deepblue.shell
 for p in "${STOCK[@]}"; do adb shell pm disable-user --user 0 "$p"; done
 echo "Home now: $(adb shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME | tail -1)"

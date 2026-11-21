@@ -48,12 +48,16 @@ const kindOf = a => {
 };
 
 let dirty = true, builtAt = 0;  // card bitmaps are redrawn when an image or font arrives
-function img(src) { const i = new Image(); i.onload = () => { dirty = true; }; i.src = src; return i; }
+function img(src) { const i = new Image(); i.onload = () => { dirty = true; }; i.onerror = () => console.warn('image not loaded: ' + src); i.src = src; return i; }
 const ok = i => i && i.complete && i.naturalWidth > 0;
 const A = Object.fromEntries(['bg', 'back', 'star', 'tab-deck', 'tab-side', 'bar-dark', 'bar-count', 'label-spell', 'label-trap',
   ...Object.keys(KIND).flatMap(k => [`frame-${k}`, `attr-${KIND[k].attr}`])].map(n => [n, img(`deck/${n}.png`)]));
 
 const params = new URLSearchParams(location.search);
+// On the TV this page runs inside the launcher app (Home.java), which provides launch(pkg) and theme(name), sends the
+// remote's keys through tvKey(), and calls home() whenever the Home screen comes back.
+const TV = window.Android || null;
+if (TV) document.getElementById('keys').remove();
 // Tag partner of the day, Sunday first (deck.html?partner=chazz forces one): name, line on coming Home, line on summoning a
 // monster. Each brings the game's summon movie of their own ace monster (summon-<name>.mp4): Flame Wingman, a Vehicroid,
 // Master of Oz, Cyber Blader, Armed Dragon, Water Dragon, Cyber End Dragon.
@@ -113,11 +117,17 @@ function setApps(list, saved = loadSaved()) {
   });
   sel = 0; scroll = scrollTo = 0; held = false; dirty = true;
 }
-fetch('banners/apps.json').then(r => r.json()).then(setApps).catch(() => setApps([
+// App list: banners/apps.json, written by pull_banners.sh here and by the launcher app on the TV; else this snapshot.
+// XMLHttpRequest because the TV loads this page from a file, where fetch() is not allowed.
+const SNAPSHOT = [
   ['YouTube', 'com.google.android.youtube.tv'], ['YouTube Music', 'com.google.android.youtube.tvmusic'], ['Plex', 'com.plexapp.android'],
   ['Netflix', 'com.netflix.ninja'], ['Prime Video', 'com.amazon.amazonvideo.livingroom'], ['Moonlight', 'com.limelight'],
   ['File Manager+', 'com.alphainventor.filemanager'], ['Google Play Store', 'com.android.vending'], ['Just Player', 'com.brouken.player'],
-  ['Timers', 'com.sony.dtv.timers'], ['System', 'com.android.tv.settings']].map(([label, pkg]) => ({ label, pkg }))));
+  ['Timers', 'com.sony.dtv.timers'], ['System', 'com.android.tv.settings']].map(([label, pkg]) => ({ label, pkg }));
+const req = new XMLHttpRequest();
+req.onload = () => { try { setApps(JSON.parse(req.responseText)); } catch (e) { setApps(SNAPSHOT); } };
+req.onerror = () => setApps(SNAPSHOT);
+req.open('GET', 'banners/apps.json'); req.send();
 
 // UI sounds: the game's own effects (deck/se/NN.ogg, the 59 clips at the end of its sound bank). Which clip an action
 // uses can be changed by ear in the menu; the defaults are the ones the owner picked there.
@@ -199,6 +209,7 @@ const slotXY = i => [GX + colOf(i) * (MW + GAP), rowOf(i) === 0 ? DECK_Y : SIDE_
 let deal = 0, pop = 1, last = 0, confirmT = -1, launching = null;
 let held = false;                 // carrying the selected card to another place in the deck
 let movie = null, movieOn = false;  // summon movie for this summon, and whether it is on screen
+let frames = 0;                   // frames drawn since coming Home, for the TV's frame-rate log
 let landed = false;               // the summoned card has reached the field (its sound has played)
 
 function drawBackground(t) {
@@ -310,7 +321,7 @@ function drawSummon(t) {
     c.drawImage(movie, 0, 0, W, H); c.restore();
     text('OK  SKIP', W - 40, H - 30, `600 28px ${UI}`, 'rgba(255,255,255,.8)', 'right');
   }
-  if (launching) text(`(prototype) the TV would now open ${launching}`, mx, H * .97, `600 40px ${UI}`, '#fff', 'center');
+  if (launching && !TV) text(`(prototype) the TV would now open ${launching}`, mx, H * .97, `600 40px ${UI}`, '#fff', 'center');
 }
 function summon() {
   if (!cards[sel].bmp) return;
@@ -344,7 +355,7 @@ function drawPartner() {
 }
 
 // Menu (Back on the remote; M or Esc here): up/down picks a row, left/right changes it, OK on Theme switches theme.
-const THEMES = [['Duel Academy', null], ['Persona', 'index.html']];  // name, page of that theme's prototype
+const THEMES = [['Duel Academy', null, 'deck'], ['Persona', 'index.html', 'persona']];  // name, its prototype page, its name in the TV app
 const partnerChoices = ['auto', ...PARTNERS.map(p => p[0])], cap = str => str[0].toUpperCase() + str.slice(1);
 let menu = false, menuRow = 0, themeAt = 0;
 const menuRows = () => [
@@ -381,7 +392,7 @@ function menuKey(e) {
     if (e.repeat && performance.now() - lastMoveAt < 2 * REPEAT_MS) return;
     lastMoveAt = performance.now(); menuChange(e.key === 'ArrowLeft' ? -1 : 1);
   }
-  else if (e.key === 'Enter' && !e.repeat) { okUsed = true; if (menuRow === 1 && THEMES[themeAt][1]) location.href = THEMES[themeAt][1]; }
+  else if (e.key === 'Enter' && !e.repeat) { okUsed = true; if (menuRow === 1 && THEMES[themeAt][1]) TV ? TV.theme(THEMES[themeAt][2]) : location.href = THEMES[themeAt][1]; }
 }
 
 let clockAt = 0, day = '', time = '';
@@ -397,6 +408,8 @@ function frame(now) {
   if (now - last < 1000 / 60 - 2) return;      // cap at 60fps (TV UI refresh) even on faster monitors
   const dt = last ? Math.min(.1, (now - last) / 1000) : 0; last = now;
   const t = (now % 3600000) / 1000;
+  if (TV && deal < 4 && deal + dt >= 4) console.log(`frame rate since coming Home: ${(frames / 4).toFixed(1)} fps`);  // shows in logcat, tag DeepBlue
+  frames = deal < dt ? 0 : frames + 1;
   deal += dt; spoke += dt; pop = Math.min(1, pop + dt * 7); scroll += (scrollTo - scroll) * Math.min(1, dt * 14);
   if (Math.abs(scroll - scrollTo) < .002) scroll = scrollTo;
   if (dirty && now - builtAt > 150) rebuild(now);
@@ -404,7 +417,7 @@ function frame(now) {
     if (!movieOn) confirmT += dt;
     if (confirmT > .4 && !landed) { landed = true; play('summon'); }
     if (movie && !movieOn && confirmT > .75) { movieOn = true; movie.currentTime = 0; movie.play().catch(endMovie); }
-    if (confirmT > .9 && !launching) launching = cards[sel].label;   // device: startActivity() here
+    if (confirmT > .9 && !launching) { launching = cards[sel].label; if (TV) TV.launch(cards[sel].pkg); }
     if (confirmT > 2.2) { confirmT = -1; launching = null; deal = 0; pop = 0; play('splash'); speak(greeting()); }  // simulate coming back home
   }
   const ease = Math.exp(-dt * 16); for (const card of cards) { card.dx *= ease; card.dy *= ease; }
@@ -482,6 +495,13 @@ function moveHeld(dx, dy) {
   cards.forEach((card, i) => { const [x, y] = slotXY(i), [ox, oy] = was.get(card); card.dx += ox - x; card.dy += oy - y; });
 }
 
+function home(toTop) {  // back on the Home screen: deal the cards again; toTop when Home was pressed while already here
+  if (toTop) { sel = 0; scroll = scrollTo = 0; }
+  confirmT = -1; launching = null; movieOn = false; if (movie) movie.pause(); movie = null;
+  deal = 0; pop = 0; held = false; menu = false; play('splash'); speak(greeting());
+}
+function tvKey(key, down, repeat) { dispatchEvent(new KeyboardEvent(down ? 'keydown' : 'keyup', { key, repeat })); }  // a function, so the app finds it on window
+
 let okTimer = 0, okUsed = true;  // okUsed: this press of OK already did something (picked up, dropped, skipped)
 addEventListener('keydown', e => {
   if (!cards.length) return;
@@ -495,7 +515,7 @@ addEventListener('keydown', e => {
     if (held) { okUsed = true; drop(); }
     else { okUsed = false; okTimer = setTimeout(() => { okUsed = true; pickUp(); }, HOLD_MS); }
   }
-  else if (e.key === 'h' || e.key === 'H') { deal = 0; sel = 0; scroll = scrollTo = 0; pop = 0; held = false; play('splash'); speak(greeting()); }
+  else if (e.key === 'h' || e.key === 'H') home(true);
   else if (e.key === 'r' || e.key === 'R') { try { localStorage.removeItem(SAVE); } catch (err) { /* nothing saved */ } setApps(appList, null); deal = 0; play('splash'); }
   else return;
   e.preventDefault();

@@ -3,6 +3,9 @@
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
+    <!-- the deck theme's page loads its two fonts from Google Fonts -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <!-- Android 11+ package visibility: the apps we list, and the TV settings app for the SYSTEM entry -->
     <queries>
         <intent>

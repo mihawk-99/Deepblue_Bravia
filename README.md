@@ -105,7 +105,7 @@ launcher/prototype/pull_banners.sh` copies your TV's real app list and banners i
 
 ### Deck editor theme (prototype)
 
-`launcher/prototype/deck.html` is a second theme, so far in the browser only: your apps are cards in the deck editor of
+`launcher/prototype/deck.html` is a second theme: your apps are cards in the deck editor of
 Yu-Gi-Oh! GX Tag Force (PSP). Pinned apps are the Deck, the rest the Side Deck; OK summons a card, a tag partner
 comments, and Duel Academy sits behind it all by time of day.
 
@@ -128,6 +128,18 @@ Then open <http://localhost:8792/prototype/deck.html> from the same server as ab
 | R / H | default deck / replay coming Home |
 
 The script is tested with the European ISO. The DeepBlue prototype has the same M / Esc menu to switch theme.
+
+**On the TV** the launcher shows this same page full screen, with your real apps and the remote. Once the game files
+are built, `install.sh` copies them and the page to the TV. From the DeepBlue home screen press Back twice to switch to
+the deck theme; in the deck theme Back opens the menu, where Theme switches back. Or from the PC:
+
+```bash
+adb shell am start -n com.deepblue.shell/.Home --es theme deck    # or: persona
+```
+
+After changing `deck.html`, run `install.sh` again (or `adb push` it to
+`/sdcard/Android/data/com.deepblue.shell/files/web/`). The page's messages and its frame rate show in
+`adb logcat -s DeepBlue`. The app needs the Internet permission for this theme, to load two fonts from Google Fonts.
 
 ### Sounds
 
