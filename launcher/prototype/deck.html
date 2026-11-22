@@ -356,6 +356,7 @@ function drawPartner() {
 
 // Menu (Back on the remote; M or Esc here): up/down picks a row, left/right changes it, OK on Theme switches theme.
 const THEMES = [['Duel Academy', null, 'deck'], ['Persona', 'index.html', 'persona']];  // name, its prototype page, its name in the TV app
+THEMES.push(['Project DIVA', 'miku.html', 'miku']);
 const partnerChoices = ['auto', ...PARTNERS.map(p => p[0])], cap = str => str[0].toUpperCase() + str.slice(1);
 let menu = false, menuRow = 0, themeAt = 0;
 const menuRows = () => [

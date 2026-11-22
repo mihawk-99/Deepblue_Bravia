@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Project DIVA song select prototype</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  canvas, video { position: absolute; inset: 0; margin: auto; width: min(100vw, 177.78vh); height: min(56.25vw, 100vh); }
+  video { object-fit: cover; }
+  #keys { position: fixed; left: 8px; bottom: 6px; color: #9dd; font: 12px system-ui, sans-serif; opacity: .75; }
+</style>
+</head>
+<body>
+<video id="stage" muted playsinline preload="auto"></video>
+<canvas id="c" aria-label="Project DIVA song select launcher prototype. Arrow keys choose an app, Enter opens it."></canvas>
+<div id="keys">↑ ↓ choose · ← → jump a difficulty · Enter open (again to skip) · M or Esc = options (Back) · H = Home button · press a key once to enable sound</div>
+<script>
+// Song-select theme: every app is a song in Project DIVA Mega Mix+'s song list. Everything in miku/ is built by
+// miku/make_assets.py from your own copy of the game (none of it is in the repository).
+// The screen is not laid out here: it plays the game's own 2D animations (miku/anim.json, exported from its aet files,
+// 1920x1080 at 60 frames a second) and fills the slots those leave empty with an app's banner, name and level.
+// The game's jacket and title art slots stay empty: an app has neither, and the list entry already shows its banner.
+const W = 1920, H = 1080, cv = document.getElementById('c'), main = cv.getContext('2d'), stage = document.getElementById('stage');
+let c = main;  // what is being drawn on: the screen, or the scratch canvas while a masked layer is put together
+cv.width = W; cv.height = H;
+const TV = window.Android || null;  // the launcher app's bridge, when this page runs on the TV
+if (TV) document.getElementById('keys').remove();
+const SEL = 'nswgam_songselector', GAM = 'gam_cmn', BG = 'nswgam_cmnbg', CMN = 'nswgam_cmn', OPT = 'nswgam_option', PL = 'nswgam_playlist';
+
+// Difficulties, easiest first as the tab bar shows them. An app's difficulty is how much you use it.
+const DIFF = [{ key: 'ESY', icon: 'ESY', top: 4, min: 1 }, { key: 'NML', icon: 'NML', top: 6, min: 3 }, { key: 'HRD', icon: 'HRD', top: 8, min: 4 },
+              { key: 'EXT', icon: 'EXT', top: 9.5, min: 6 }, { key: 'EXEX', icon: 'EXEXT', top: 10, min: 6 }];
+const SHARE = [.12, .32, .57, .82];  // of the list, most used first: EXTRA EXTREME, EXTREME, HARD, NORMAL, then EASY
+const diffOf = (i, n) => 4 - SHARE.concat(1).findIndex(s => i < Math.max(1, Math.round(s * n)) || s === 1);
+
+const images = {};
+function img(src) {  // loaded on first use; drawn once it has arrived
+  const i = images[src] || (images[src] = Object.assign(new Image(), { src }));
+  return i.complete && i.naturalWidth ? i : null;
+}
+const spr = (set, name) => img(`miku/ui/${set}/${name}.png`);
+
+// Settings (the Back-button menu), kept across visits.
+const ROLES = [['move', 'Move', 'sys_cursor'], ['group', 'Difficulty', 'sel_wipe01'], ['ok', 'Confirm', 'sys_kettei2'],
+               ['note', 'Note hit', '01_button1'], ['menu', 'Menu', 'window_s1'], ['home', 'Home', 'sel_board']];
+const BACKGROUNDS = [['movie', 'Movie', "The menu song's movie (its art if it has none)"], ['art', 'Art', "The menu song's still art"], ['menu', 'Menu', "The game's menu background"]];
+const SETTINGS = 'miku-menu';
+const settings = { song: '281', volume: 4, bg: 'movie', se: Object.fromEntries(ROLES.map(r => [r[0], r[2]])) };
+try { const saved = JSON.parse(localStorage.getItem(SETTINGS)); Object.assign(settings, saved, { se: Object.assign(settings.se, saved && saved.se) }); } catch (e) { /* first visit */ }
+if (!BACKGROUNDS.some(b => b[0] === settings.bg)) settings.bg = 'movie';
+if (settings.v !== 2) { settings.v = 2; settings.song = '281'; }  // once: the default became a song that has a movie
+const saveSettings = () => { try { localStorage.setItem(SETTINGS, JSON.stringify(settings)); } catch (e) { /* lasts until reload */ } };
+
+// What the build script wrote. The page waits for the animations; the rest it does without while missing.
+let anim = null, font = null, sounds = [], songs = [];
+function getJson(url, then, otherwise) {  // XMLHttpRequest, not fetch: the TV loads this page from file://
+  const r = new XMLHttpRequest();
+  r.onload = () => { try { then(JSON.parse(r.responseText)); } catch (e) { otherwise && otherwise(); } };
+  r.onerror = () => otherwise && otherwise();
+  r.open('GET', url); r.send();
+}
+getJson('miku/anim.json', v => {
+  anim = v;
+  for (const set of Object.values(v)) for (const layers of Object.values(set.comps)) for (const l of layers) if (l.spr && l.spr[0]) img(`miku/ui/${l.spr[0]}.png`);  // so an effect's first showing has its pictures
+  for (const set of Object.values(v)) for (const l of Object.values(set.roots)) l.v = 1;  // the game leaves some switched off until it plays them
+  home(false);
+});
+getJson('miku/font.json', v => font = v);
+getJson('miku/sounds.json', v => sounds = v);
+getJson('miku/songs.json', v => { songs = v; startSong(); });
+
+const clips = {};
+function play(role, name) {  // browsers block audio until the first key press
+  const i = sounds.findIndex(s => s[0] === (name || settings.se[role]));
+  if (i < 0) return;
+  const a = (clips[i] || (clips[i] = new Audio(`miku/se/${String(i).padStart(3, '0')}.ogg`))).cloneNode();
+  a.volume = Math.min(1, sounds[i][1] * 1.5); a.play().catch(() => {});
+}
+// The menu song, and its movie where the game has one (the movie is silent: the song is its sound, so they run together).
+const music = Object.assign(new Audio(), { loop: true });
+const currentSong = () => songs.find(s => s.id === settings.song);
+let bgF = 0;  // frames since the background changed
+function startSong() {
+  const song = currentSong();
+  music.volume = settings.volume / 10;
+  const src = song ? `miku/songs/${song.id}.ogg` : '', movie = song && song.movie ? `miku/movies/${song.id}.webm` : '';
+  if (!music.src.endsWith(src) || !src) { src ? music.src = src : music.removeAttribute('src'); bgF = 0; }
+  if (!stage.src.endsWith(movie) || !movie) { movie ? stage.src = movie : stage.removeAttribute('src'); if (!movie) stage.load(); }
+  if (src && launchF < 0) music.play().catch(() => {}); else music.pause();
+}
+
+// Apps: banners/apps.json, written by pull_banners.sh here and by the launcher app on the TV; else this snapshot.
+// The list order is the launcher's: pinned first, then by how often you open them, System last.
+const SNAPSHOT = ['YouTube', 'Netflix', 'Prime Video', 'Plex', 'Spotify', 'Twitch', 'Kodi', 'Disney+', 'Apple TV', 'Crunchyroll', 'Steam Link',
+                  'Just Player', 'File Manager +', 'Google Play Store', 'System'].map(label => ({ pkg: label, label }));
+let apps = [], sel = 0;
+function setApps(list) {
+  apps = list.map((a, i) => Object.assign({}, a, { d: diffOf(i, list.length), art: a.banner ? Object.assign(new Image(), { src: a.banner }) : null }));
+  for (const d of DIFF.keys()) apps.filter(a => a.d === d).forEach((a, j) => a.level = Math.max(DIFF[d].min, DIFF[d].top - j / 2));
+  sel = Math.min(sel, apps.length - 1);
+}
+getJson('banners/apps.json', setApps, () => setApps(SNAPSHOT));
+
+// --- playing the game's animations ----------------------------------------------------------------------------------
+// A matrix is [a, b, c, d, e, f] as canvas setTransform takes it.
+const ID = [1, 0, 0, 1, 0, 0], at = (x, y) => [1, 0, 0, 1, x, y];
+const mul = (m, n) => [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3],
+                       m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5]];
+function value(k, t) {  // a curve at frame t: a constant, or keys [frame, value, slope] joined by Hermite splines
+  if (typeof k === 'number') return k;
+  if (t <= k[0][0]) return k[0][1];
+  for (let i = 1; i < k.length; i++) {
+    if (t >= k[i][0]) continue;
+    const [t0, v0, m0] = k[i - 1], [t1, v1, m1] = k[i], dt = t1 - t0, x = (t - t0) / dt, x2 = x * x, x3 = x2 * x;
+    return (2 * x3 - 3 * x2 + 1) * v0 + (x3 - 2 * x2 + x) * m0 * dt + (3 * x2 - 2 * x3) * v1 + (x3 - x2) * m1 * dt;
+  }
+  return k[k.length - 1][1];
+}
+function local(l, t) {  // position, rotation and scale about the layer's anchor
+  const k = l.k;
+  if (!k) return ID;
+  const r = value(k[4], t) * Math.PI / 180, cs = Math.cos(r), sn = Math.sin(r), sx = value(k[5], t), sy = value(k[6], t), ax = value(k[0], t), ay = value(k[1], t);
+  return [cs * sx, sn * sx, -sn * sy, cs * sy, value(k[2], t) - (cs * sx * ax - sn * sy * ay), value(k[3], t) - (sn * sx * ax + cs * sy * ay)];
+}
+function world(layers, l, t) {  // a layer follows its parent's movement, not its opacity
+  let m = local(l, t);
+  for (let p = l.p; p >= 0; p = layers[p].p) m = mul(local(layers[p], t), m);
+  return m;
+}
+const scratch = Object.assign(document.createElement('canvas'), { width: W, height: H }).getContext('2d');
+// hooks: { layer name: (matrix, alpha, layer, frame) => draw something else there, or null to leave the layer out }
+function drawLayer(set, l, t, m, a, hooks, op) {
+  if (l.c !== undefined) return drawLayers(set, anim[set].comps[l.c], (t - l.i) * (l.sp || 1) + l.s, m, a, hooks);  // its own clock starts when it comes in
+  const image = l.spr && l.spr[0] && img(`miku/ui/${l.spr[0]}.png`);
+  if (!image) return;
+  c.setTransform(m[0], m[1], m[2], m[3], m[4], m[5]); c.globalAlpha = a;
+  c.globalCompositeOperation = op || (l.b === 5 ? 'lighter' : 'source-over'); c.drawImage(image, 0, 0);
+}
+function drawLayers(set, layers, t, M, alpha, hooks) {
+  for (let i = layers.length - 1; i >= 0; i--) {  // the first layer is the top one
+    const l = layers[i];
+    if (!l.v || t < l.i || t >= l.o) continue;
+    const m = mul(M, world(layers, l, t)), a = alpha * (l.k ? value(l.k[7], t) : 1), hook = hooks ? hooks[l.n] : undefined;
+    if (a <= 0 || hook === null) continue;
+    const masked = l.m && i > 0 && c === main, mask = layers[i - 1];  // shown only through the layer above it
+    if (masked) { c = scratch; reset(); c.clearRect(0, 0, W, H); }
+    hook ? hook(m, masked ? 1 : a, l, t) : drawLayer(set, l, t, m, masked ? 1 : a, hooks);
+    if (masked) {
+      drawLayer(set, mask, t, mul(M, world(layers, mask, t)), mask.k ? value(mask.k[7], t) : 1, null, 'destination-in');
+      c = main; reset(); c.globalAlpha = a; c.globalCompositeOperation = l.b === 5 ? 'lighter' : 'source-over'; c.drawImage(scratch.canvas, 0, 0);
+    }
+  }
+}
+const root = (set, name) => anim[set].roots[name];
+function playRoot(set, name, t, hooks, M = ID, alpha = 1) { const l = root(set, name); if (l) drawLayers(set, [l], t, M, alpha, hooks); }
+function inside(set, name, t, m, a, hooks) { const l = root(set, name); if (l) drawLayers(set, anim[set].comps[l.c], t, m, a, hooks); }  // a root's content, placed in a slot
+const loop = (l, f, n = '') => l.mk['st_lp' + n] + f % (l.mk['ed_lp' + n] - l.mk['st_lp' + n] + 1);
+function reset() { c.setTransform(1, 0, 0, 1, 0, 0); c.globalAlpha = 1; c.globalCompositeOperation = 'source-over'; }
+
+// Text in the game's own 36-pixel font: a white glyph sheet, tinted once per string.
+const textCache = new Map();
+function textBitmap(str, face, color) {
+  const key = face + color + str, sheet = img(`miku/font-${face}.png`), table = font && font[face];
+  if (textCache.has(key) || !sheet || !table) return textCache.get(key);
+  const glyphs = Array.from(str, ch => table[ch] || table[' ']), b = document.createElement('canvas'), x = b.getContext('2d');
+  b.width = Math.max(1, glyphs.reduce((w, g) => w + g[1], 0)); b.height = font.cell;
+  let left = 0;
+  for (const [i, w] of glyphs) { x.drawImage(sheet, i % font.columns * font.cell, Math.floor(i / font.columns) * font.cell, w, font.cell, left, 0, w, font.cell); left += w; }
+  x.globalCompositeOperation = 'source-in'; x.fillStyle = color; x.fillRect(0, 0, b.width, b.height);
+  textCache.set(key, b); return b;
+}
+function boxText(str, face, color, m, a, w, h, align = 'left', scale = 1) {  // in a w x h box; too wide a string is squeezed, as the game does
+  const b = textBitmap(str, face, color);
+  if (!b) return;
+  const sx = scale * Math.min(1, w / (b.width * scale)), x = align === 'center' ? (w - b.width * sx) / 2 : align === 'right' ? w - b.width * sx : 0;
+  const t = mul(m, [sx, 0, 0, scale, x, (h - b.height * scale) / 2]);
+  c.setTransform(t[0], t[1], t[2], t[3], t[4], t[5]); c.globalAlpha = a; c.globalCompositeOperation = 'source-over'; c.drawImage(b, 0, 0);
+}
+function picture(image, m, a, w, h) {  // fill a w x h slot, cropping what sticks out
+  if (!image || !image.naturalWidth) return;
+  const s = Math.max(w / image.naturalWidth, h / image.naturalHeight), sw = w / s, sh = h / s;
+  c.setTransform(m[0], m[1], m[2], m[3], m[4], m[5]); c.globalAlpha = a; c.globalCompositeOperation = 'source-over';
+  c.drawImage(image, (image.naturalWidth - sw) / 2, (image.naturalHeight - sh) / 2, sw, sh, 0, 0, w, h);
+}
+const sprite = (set, name) => (m, a) => picture(spr(set, name), m, a, (spr(set, name) || {}).width, (spr(set, name) || {}).height);
+function digits(n, m, a) {  // the game's digit sprites, right-aligned on the slot of the last digit
+  const s = String(n);
+  for (let i = 0; i < s.length; i++) sprite(SEL, `SONG_NUM40X34_0${s[s.length - 1 - i]}`)(mul(m, at(-i * 30, 0)), a);
+}
+
+// --- the song select screen ---------------------------------------------------------------------------------------
+let frameNo = 0, homeF = 0, listMove = null, pending = 0;  // frame counters; a list move in progress; queued moves
+function entryHooks(app, icons, names) {  // what goes in the empty slots of one list entry
+  const d = DIFF[app.d], l = app.level;
+  return {
+    p_list_base_c: sprite(SEL, `LIST_BASE_${d.key}`),
+    p_list_base_sel_c: sprite(SEL, `LIST_BASE_${d.key}_SEL`),
+    p_list_base_nml_sel_c: (m, a) => inside(SEL, 'list_base_nml_sel', loop(root(SEL, 'list_base_nml_sel'), frameNo), m, a),  // the cursor's glow
+    p_song_jk_thumbnail_c: (m, a, layer) => icons.push([app.art, m, a, layer.w, layer.h]),  // drawn after every bar and the cursor, so nothing covers it
+    p_song_name_text_c: (m, a, layer) => names.push([app.label, 'regular', '#1c1c24', m, a, layer.w, layer.h, 'left', layer.h / font.cell]),  // the font fills the slot's height; drawn last, over the icon's edge
+    p_lv_icon_c: sprite(SEL, `${d.icon}_LV_ICON_LV${Math.floor(l)}${l % 1 ? '_5' : ''}`),
+    'num24x28_dot.pic': null,  // part of the score the game prints here
+  };
+}
+function drawList() {
+  const move = listMove, name = homeF < 13 ? 'list_in' : move ? move.name : 'list_loop', t = homeF < 13 ? homeF : move ? Math.min(move.f, 5) : loop(root(SEL, 'list_loop'), frameNo);
+  const hooks = {}, icons = [], names = [];
+  for (let slot = 1; slot <= 11; slot++) {  // slot 5 holds the selected song
+    const i = sel + slot - 5, app = apps[i];
+    if (app) hooks[`p_selector_dummy_${String(slot).padStart(2, '0')}_c`] = (m, a) => inside(SEL, i === (move ? sel + move.d : sel) ? 'list sel' : 'list', 0, m, a, entryHooks(app, icons, names));
+  }
+  playRoot(SEL, name, t, hooks);
+  for (const icon of icons) picture(...icon);
+  for (const name of names) boxText(...name);
+}
+let syncedAt = 0;
+function drawBackground() {
+  const song = currentSong(), movie = settings.bg === 'movie' && song && song.movie, art = settings.bg !== 'menu' && song && img(`miku/jk/${song.id}-bg.jpg`);
+  if (movie && !music.paused) {
+    if (music.currentTime + 2 < stage.currentTime || (stage.ended && music.currentTime < 5)) stage.currentTime = music.currentTime;  // the song started over
+    else if (stage.paused && !stage.ended) stage.play().catch(() => {});
+    else if (!stage.ended && !stage.seeking && stage.readyState >= 3 && Math.abs(stage.currentTime - music.currentTime) > .4 && frameNo - syncedAt > 300) {
+      music.currentTime = stage.currentTime; syncedAt = frameNo;  // the song follows the picture: moving sound is instant, moving a movie is slow on a TV
+    }
+  } else if (!stage.paused) stage.pause();
+  c.clearRect(0, 0, W, H);  // the movie is the element behind this canvas
+  if (movie && stage.readyState >= 2 && stage.currentTime > 0) return;
+  if (!art || bgF < 12) for (const name of Object.keys(anim[BG].roots).reverse()) playRoot(BG, name, loop(root(BG, name), frameNo));
+  if (art) playRoot(SEL, 'song_bg', Math.min(bgF, 50), { 'song_bg_dummy.pic': (m, a, l) => picture(art, m, a, l.w, l.h) });  // as the game shows a song's art; also while its movie loads
+}
+function drawScreen() {
+  const app = apps[listMove ? sel + listMove.d : sel], f = frameNo;
+  drawBackground();
+  drawList();
+  playRoot(SEL, 'header_belt', Math.min(homeF, 100));
+  if (!menu && !picker) {  // the options screen brings its own footer
+    playRoot(SEL, 'nsw_menu_fotter_arcade', f % 1000);
+    const tabT = loop(root(SEL, 'lv_tab_arcade'), f, `_0${app.d + 1}`);
+    playRoot(SEL, 'lv_tab_arcade', tabT);
+    DIFF.forEach((d, i) => { if (!apps.some(a => a.d === i)) playRoot(SEL, `lv_tab_arcade_${d.key.toLowerCase()}_off`, tabT); });
+  }
+  const shown = Math.min(homeF, 30);  // these come in over ten frames, then hold
+  playRoot(SEL, 'scrl_base', shown);
+  playRoot(SEL, 'scrl', apps.length > 1 ? 69 * apps.indexOf(app) / (apps.length - 1) : 0);
+  playRoot(SEL, 'song_num', shown, { p_fnt_cmn_num40x34_01_rt: (m, a) => digits(apps.indexOf(app) + 1, m, a), p_fnt_cmn_num40x34_02_rt: (m, a) => digits(apps.length, m, a) });
+  const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  boxText(now, 'bold', '#fff', at(W - 264, 30), 1, 200, 46, 'right', 1.2);
+  reset();
+}
+
+// Opening an app: four notes fly to their targets and each lands a COOL, all played from the game's own note
+// animations; then its loading screen, and the app starts. About a second; OK skips. Where the notes sit and the
+// path they fly are set here (in the game a song's chart gives both).
+const NOTES = ['sankaku', 'shikaku', 'batsu', 'maru'].map((shape, i) => ({ shape, x: 960 + (i - 1.5) * 240, y: 430, appear: i * 4, hit: 22 + i * 6, from: -2.2 + i * 1.5 }));
+const LAUNCH_F = 58, RESET_F = 132;
+let launchF = -1, launched = false, notesHit = 0;
+function drawLaunch() {
+  NOTES.forEach((n, i) => {
+    const P = at(n.x, n.y), since = launchF - n.appear, after = launchF - n.hit;
+    if (since < 0) return;
+    if (after < 0) {
+      const p = since / (n.hit - n.appear), far = (1 - p) * 1200, bend = Math.sin(p * Math.PI * 2) * 60;
+      playRoot(GAM, 'target_eff', since, null, P);
+      playRoot(GAM, `target_${n.shape}`, since, { 'target_hand__n.pic': (m, a, l) => {  // the game turns the hand once round by the time the note lands
+        const ax = value(l.k[0], 0), ay = value(l.k[1], 0), r = p * Math.PI * 2, cs = Math.cos(r), sn = Math.sin(r);
+        sprite(GAM, 'TARGET_HAND')(mul(m, mul(at(ax, ay), mul([cs, sn, -sn, cs, 0, 0], at(-ax, -ay)))), a);
+      } }, P);
+      playRoot(GAM, `button_${n.shape}`, since, null, at(n.x + Math.cos(n.from) * far - Math.sin(n.from) * bend, n.y + Math.sin(n.from) * far + Math.cos(n.from) * bend));
+    } else {
+      if (i >= notesHit) { notesHit = i + 1; play('note'); }
+      playRoot(GAM, 'hit_eff00', after, null, P);
+      playRoot(GAM, 'combo_cool001', after, null, P);
+    }
+  });
+  if (launchF >= LAUNCH_F) {
+    const f = launchF - LAUNCH_F;
+    c.setTransform(1, 0, 0, 1, 0, 0); c.globalCompositeOperation = 'source-over'; c.globalAlpha = Math.min(1, f / 8); c.fillStyle = '#000'; c.fillRect(0, 0, W, H);
+    playRoot(CMN, 'loading_bg', 5, null, ID, Math.min(1, f / 8));
+    playRoot(CMN, 'now_loading', loop(root(CMN, 'now_loading'), f), null, ID, Math.min(1, f / 8));
+  }
+  reset();
+}
+
+// --- the Back-button menu: the game's own options panel and song list -----------------------------------------------------
+// The game's rows carry their labels as pictures ("Music Volume", "Frame Rate"...); ours are written into the same
+// slots in its font.
+const THEMES = [['Project DIVA', null, 'miku'], ['Duel Academy', 'deck.html', 'deck'], ['Persona', 'index.html', 'persona']];  // name, its prototype page, its name in the TV app
+let menu = false, menuRow = 0, menuF = 0, themeAt = 0, picker = false, pickAt = 0, pickF = 0;
+const songChoices = () => [{ id: '', title: 'Off' }].concat(songs);
+const step = (v, n, d) => (v + d + n) % n;
+function menuRows() {  // label, value, help line
+  const song = currentSong(), change = 'Left / Right to change';
+  return [
+    ['Theme', THEMES[themeAt][0], THEMES[themeAt][1] ? 'OK switches to this theme' : change],
+    ['Menu Song', song ? song.title : 'Off', 'OK opens the song list'],
+    ['Music Volume', String(settings.volume), change],
+    ['Background'].concat(BACKGROUNDS.find(b => b[0] === settings.bg).slice(1)),
+  ].concat(ROLES.map(([role, label]) => ['Sound: ' + label, settings.se[role], `${change}   (${sounds.findIndex(s => s[0] === settings.se[role]) + 1} of ${sounds.length})`]));
+}
+function menuChange(d) {
+  if (menuRow === 0) themeAt = step(themeAt, THEMES.length, d);
+  else if (menuRow === 1) { const list = songChoices(); settings.song = list[step(list.findIndex(s => s.id === settings.song), list.length, d)].id; startSong(); }
+  else if (menuRow === 2) { settings.volume = Math.max(0, Math.min(10, settings.volume + d)); startSong(); }
+  else if (menuRow === 3) { settings.bg = BACKGROUNDS[step(BACKGROUNDS.findIndex(b => b[0] === settings.bg), BACKGROUNDS.length, d)][0]; bgF = 0; }
+  else if (sounds.length) { const role = ROLES[menuRow - 4][0]; settings.se[role] = sounds[step(sounds.findIndex(s => s[0] === settings.se[role]), sounds.length, d)][0]; play(role); }
+  if (menuRow < 4) play('move');
+  saveSettings();
+}
+const slotText = (str, face, color, align = 'left') => (m, a, l) => boxText(str, face, color, m, a, l.w, l.h, align, l.h / 44);
+function helpLine(str) {
+  playRoot(OPT, 'footer_01', 0); playRoot(OPT, 'footer_back', 0);  // the options screen's own footer, and the band its help line sits on
+  playRoot(OPT, 'help_text', 0, { p_help_text_c: slotText(str, 'regular', '#fff', 'center') });
+}
+function drawMenu() {
+  const rows = menuRows(), row = root(OPT, 'option_submenu_01__f'), first = Math.max(0, Math.min(menuRow - 3, rows.length - 7));
+  const hooks = { 'btnlist_bs_txt_03.pic': slotText('Options', 'bold', '#fff') };
+  for (let slot = 1; slot <= 7; slot++) {
+    const i = first + slot - 1, r = rows[i];
+    if (r) hooks[`p_submenu_0${slot}_c`] = (m, a) => inside(OPT, 'option_submenu_01__f', i === menuRow ? loop(row, frameNo) : 0, m, a, {
+      'btn_txt_01.pic': slotText(r[0], 'bold', '#8c8c98'), 'btn_txt_sel_01.pic': slotText(r[0], 'bold', '#fff'),
+      p_setting_txt2_c: slotText(r[1], 'regular', '#fff', 'center'), p_setting_txt2_sel_c: slotText(r[1], 'regular', '#fff', 'center'),
+    });
+  }
+  playRoot(OPT, 'submenu_anm_03', menuF < 16 ? menuF : 16 + (menuF - 16) % 14, hooks);  // comes in over 15 frames, then loops
+  helpLine(rows[menuRow][2] + '      Back closes');
+  reset();
+}
+function drawPicker() {
+  const list = songChoices(), row = root(PL, 'sound_list_01'), first = Math.max(0, Math.min(pickAt - 3, list.length - 8)), hooks = {};
+  for (let slot = 1; slot <= 8; slot++) {
+    const i = first + slot - 1, song = list[i], no = String(i).padStart(3, '0');
+    const digit = at => (i ? sprite(PL, `NUM_SONGLIST_0${no[at]}`) : null);
+    if (song) hooks[`p_song_list_0${slot}_c`] = (m, a) => inside(PL, 'sound_list_01', i === pickAt ? loop(row, frameNo) : 0, m, a, {
+      p_songlist_name_lt: slotText(song.title, 'regular', '#1c1c24'), p_songlist_name_sel_lt: slotText(song.title, 'regular', '#fff'),
+      p_songlist_num_100_c: digit(0), p_songlist_num_010_c: digit(1), p_songlist_num_001_c: digit(2),
+    });
+  }
+  playRoot(PL, 'playlist_song_win_base_in', pickF < 11 ? pickF : 11 + (pickF - 11) % 40, hooks);
+  playRoot(PL, 'songlist_scrl_bar', list.length > 1 ? 69 * pickAt / (list.length - 1) : 0);
+  const song = list[pickAt];
+  helpLine((song.id ? `${song.by}${song.bpm ? `   ${song.bpm} BPM` : ''}${song.movie ? '   with its movie' : ''}      ` : '') + 'OK plays it      Back closes');
+  reset();
+}
+
+// --- frame ----------------------------------------------------------------------------------------------------------
+let last = 0, frames = 0, fpsFrom = 0;
+function frame(now) {
+  requestAnimationFrame(frame);
+  const t = now / 1000, df = Math.min(3, (t - last) * 60); last = t;  // the animations count in sixtieths of a second
+  if (!apps.length || !anim) return;
+  frameNo += df; homeF += df; bgF += df; menuF += df; pickF += df; frames++;
+  if (TV && fpsFrom && t - fpsFrom > 4) { console.log(`frame rate since coming Home: ${(frames / (t - fpsFrom)).toFixed(1)}`); fpsFrom = 0; }
+  if (listMove && (listMove.f += df) >= 6) { sel += listMove.d; listMove = null; }  // the game's list moves take six frames
+  if (!listMove && pending && homeF >= 13) {
+    const d = Math.sign(pending); pending -= d;
+    if (apps[sel + d]) { listMove = { name: d > 0 ? 'list_up' : 'list_down', d, f: 0 }; play('move'); }
+    else { sel = d > 0 ? 0 : apps.length - 1; homeF = 0; pending = 0; play('group'); }  // off one end: come in again at the other
+  }
+  drawScreen();
+  if (launchF >= 0) {
+    launchF += df; drawLaunch();
+    if (launchF >= LAUNCH_F && !launched) { launched = true; music.pause(); if (TV) TV.launch(apps[sel].pkg); }
+    if (launchF > RESET_F && !TV) home(false);  // in a browser nothing opens, so come back
+  }
+  if (picker) drawPicker(); else if (menu) drawMenu();
+}
+
+// --- input ----------------------------------------------------------------------------------------------------------
+function home(toTop) {  // back on the Home screen; toTop when Home was pressed while already here
+  if (toTop) sel = 0;
+  launchF = -1; launched = false; notesHit = 0; menu = picker = false; listMove = null; pending = 0; homeF = 0; frames = 0; fpsFrom = performance.now() / 1000;
+  play('home'); startSong();
+}
+function away() { music.pause(); stage.pause(); }  // the TV app calls this when another app comes in front
+function tvKey(key, down, repeat) { dispatchEvent(new KeyboardEvent(down ? 'keydown' : 'keyup', { key, repeat })); }  // a function, so the app finds it on window
+function jump(d) {  // to the first app of the next difficulty that has any (right = harder = more used = up the list)
+  for (let want = apps[sel].d + d; want >= 0 && want < DIFF.length; want += d) {
+    const i = apps.findIndex(a => a.d === want);
+    if (i >= 0) { sel = i; listMove = null; pending = 0; homeF = 0; return play('group'); }  // the list comes in again, as when the game changes tab
+  }
+}
+addEventListener('keydown', e => {
+  if (!apps.length || !anim) return;
+  if (music.paused && launchF < 0) startSong();  // first key press: the browser now allows sound
+  const back = e.key === 'Escape' || e.key === 'Backspace' || e.key === 'm' || e.key === 'M';
+  const dy = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0, dx = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+  if (dy || dx || back || e.key === 'Enter') e.preventDefault();
+  if (launchF >= 0) {  // opening: OK skips straight to the app
+    if (e.key === 'Enter' && !e.repeat && !launched) launchF = LAUNCH_F;
+  } else if (picker) {
+    const list = songChoices();
+    if (dy) { pickAt = step(pickAt, list.length, dy); play('move'); }
+    else if (e.key === 'Enter' && !e.repeat) { settings.song = list[pickAt].id; saveSettings(); startSong(); picker = false; play('ok'); }
+    else if (back && !e.repeat) { picker = false; play('menu'); }
+  } else if (menu) {
+    if (dy) { menuRow = step(menuRow, menuRows().length, dy); play('move'); }
+    else if (dx) menuChange(dx);
+    else if (e.key === 'Enter' && !e.repeat) {
+      if (menuRow === 0 && THEMES[themeAt][1]) TV ? TV.theme(THEMES[themeAt][2]) : location.href = THEMES[themeAt][1];
+      else if (menuRow === 1) { picker = true; pickF = 0; pickAt = Math.max(0, songChoices().findIndex(s => s.id === settings.song)); play('ok'); }
+    } else if (back && !e.repeat) { menu = false; play('menu'); }
+  } else if (back) { if (!e.repeat) { menu = true; menuF = 0; menuRow = 0; themeAt = 0; play('menu'); } }
+  else if (dy) pending = Math.max(-2, Math.min(2, pending + dy));
+  else if (dx) jump(dx);
+  else if (e.key === 'Enter' && !e.repeat && !listMove) { launchF = 0; notesHit = 0; pending = 0; play('ok'); }
+  else if (e.key === 'h' || e.key === 'H') home(true);
+});
+requestAnimationFrame(frame);
+
+// Self-check (open miku.html#test): difficulty split, curve and matrix maths, and the left/right jump.
+if (location.hash === '#test') {
+  const ok = (what, pass) => console.log(`${pass ? 'ok  ' : 'FAIL'} ${what}`), near = (a, b) => Math.abs(a - b) < 1e-9;
+  const ds = Array.from({ length: 25 }, (_, i) => diffOf(i, 25));
+  ok('most used app is EXTRA EXTREME, least used is EASY', ds[0] === 4 && ds[24] === 0);
+  ok('difficulty never rises going down the list', ds.every((d, i) => !i || d <= ds[i - 1]));
+  ok('every difficulty has an app in a list of 25', [0, 1, 2, 3, 4].every(d => ds.includes(d)));
+  ok('a single app still gets a difficulty', diffOf(0, 1) === 4);
+  const k = [[0, 10, 0], [10, 30, 0]];
+  ok('a curve holds its ends and passes through its keys', value(k, -5) === 10 && value(k, 0) === 10 && value(k, 10) === 30 && value(k, 99) === 30 && value(7, 3) === 7);
+  ok('flat-ended curve is halfway at its middle', near(value(k, 5), 20));
+  ok('a slope of 2 per frame is followed', near(value([[0, 0, 2], [10, 20, 2]], 5), 10));
+  const m = local({ k: [10, 20, 100, 200, 0, 2, 2, 1] }, 0);
+  ok('a layer puts its anchor at its position', near(m[0] * 10 + m[2] * 20 + m[4], 100) && near(m[1] * 10 + m[3] * 20 + m[5], 200) && m[0] === 2);
+  const r = local({ k: [0, 0, 0, 0, 90, 1, 1, 1] }, 0);
+  ok('rotation turns x towards y (clockwise on screen)', near(r[0], 0) && near(r[1], 1));
+  const child = { k: [0, 0, 10, 0, 0, 1, 1, 1], p: 0 };
+  ok('a child follows its parent', near(world([{ k: [0, 0, 5, 5, 0, 2, 2, 1], p: -1 }, child], child, 0)[4], 25));
+  setApps(SNAPSHOT); sel = apps.findIndex(a => a.d === 2);
+  jump(1); ok('right jumps to the first app of the next difficulty up', apps[sel].d === 3 && (sel === 0 || apps[sel - 1].d === 4));
+  jump(-1); jump(-1); ok('left jumps down', apps[sel].d === 1);
+  sel = 0; jump(1); ok('right at the top stays put', sel === 0);
+}
+</script>
+</body>
+</html>

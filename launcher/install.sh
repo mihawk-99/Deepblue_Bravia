@@ -36,6 +36,11 @@ if [ -f prototype/deck/bg.png ]; then
   adb shell mkdir -p /sdcard/Android/data/com.deepblue.shell/files/web
   adb push prototype/deck.html prototype/deck /sdcard/Android/data/com.deepblue.shell/files/web/
 fi
+# Song select theme: the same, for the files miku/make_assets.py built. The deck theme's menu switches to it.
+if [ -f prototype/miku/anim.json ]; then
+  adb shell mkdir -p /sdcard/Android/data/com.deepblue.shell/files/web
+  adb push prototype/miku.html prototype/miku /sdcard/Android/data/com.deepblue.shell/files/web/
+fi
 adb shell cmd role add-role-holder android.app.role.HOME com.deepblue.shell
 for p in "${STOCK[@]}"; do adb shell pm disable-user --user 0 "$p"; done
 echo "Home now: $(adb shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME | tail -1)"

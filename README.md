@@ -1,6 +1,6 @@
 # Deepblue_Bravia
 
-![The DeepBlue home screen on a Sony A80CJ](docs/screenshot.jpg)
+![The three themes: Persona 3 Reload menu (top), Yu-Gi-Oh! GX Tag Force deck editor and Project DIVA song select](docs/screenshot.jpg)
 
 A debloat kit and a fast custom home screen for Sony BRAVIA TVs running Google TV, done entirely over ADB on your
 home network. No root.
@@ -10,6 +10,9 @@ home network. No root.
 - **DeepBlue** (`launcher/`) is a home screen that replaces Google TV's, styled after the Persona 3 Reload menu: a
   vertical, slanted app menu over a Makoto Yuki clip, with a live preview of each app's banner, UI sounds, and an
   entrance animation. It holds 60 fps on the TV and draws nothing when an app is open.
+- **Two more themes** are prototypes you can switch to on the TV: a [deck editor](#deck-editor-theme-prototype) from
+  Yu-Gi-Oh! GX Tag Force and a [song select](#song-select-theme-prototype) from Hatsune Miku: Project DIVA Mega Mix+.
+  Each is built from your own copy of its game; none of the games' files are in this repository.
 
 Tested on a **Sony A80CJ** (MediaTek MT5895, Android 12 Google TV). Other BRAVIAs on Google TV with Android 12
 or newer are expected to work but have not been tested; please open an issue with your model either way.
@@ -141,6 +144,43 @@ After changing `deck.html`, run `install.sh` again (or `adb push` it to
 `/sdcard/Android/data/com.deepblue.shell/files/web/`). The page's messages and its frame rate show in
 `adb logcat -s DeepBlue`. The app needs the Internet permission for this theme, to load two fonts from Google Fonts.
 
+### Song select theme (prototype)
+
+`launcher/prototype/miku.html` is a third theme: your apps are songs in the song list of Hatsune Miku: Project DIVA
+Mega Mix+. The page does not lay the screen out itself: it plays the game's own 2D animations (list, tabs, cursor,
+note targets, hit effects, loading screen) and fills the slots they leave empty with an app's banner, name and level.
+An app's difficulty is how much you use it (the list order: most used is EXTRA EXTREME). A song from the game plays
+while you are Home. Behind the list is that song's music video where the game has it as a movie file (19 songs; it
+draws the others live in 3D), or the song's still art; the options choose between movie, art and the game's menu
+background. OK plays a one-second run of four notes, each a COOL, then the game's loading screen, and opens the app.
+
+None of the game's art, sounds, songs or movies is in this repository. Build them from your own copy of the game on
+Steam (needs Pillow, numpy, cryptography and `ffmpeg`; about two minutes and 930 MB the first time, ignored by git):
+
+```bash
+launcher/prototype/miku/make_assets.py
+```
+
+It looks in the default Steam library; pass the game folder otherwise. It builds about 30 songs for the menu, nine
+of them Miku's with their movies (860 MB of the total; movies are copied as they are, not re-encoded);
+`--songs all` builds every song you own (about 260, 3 GB), `--songs "Po Pi Po,Melt"` just those.
+A second run only adds what is missing. Then open <http://localhost:8792/prototype/miku.html>.
+
+| Key | Does |
+|---|---|
+| Up / Down | choose an app |
+| Left / Right | jump to the next difficulty |
+| Enter | open it (Enter again skips the notes) |
+| M or Esc | options: theme, menu song (Enter for the list), music volume, background, sounds |
+| H | replay coming Home |
+
+The options menu is the game's options panel and the song list its playlist screen; their row labels are written
+in the game's font, since the game's own labels are pictures of its settings' names. Set by the page rather than taken
+from the game: where the four launch notes sit and the path they fly, and the clock.
+
+**On the TV** it works like the deck theme: once the game files are built, `install.sh` copies them and the page (about
+930 MB with the default songs), and the deck theme's menu or `--es theme miku` switches to it.
+
 ### Sounds
 
 `launcher/make_sounds.py` synthesizes the four UI sounds into `launcher/res/raw/` with the standard library only.
@@ -162,7 +202,10 @@ After changing `deck.html`, run `install.sh` again (or `adb push` it to
   and included as fan use. It is not covered by the MIT license.
 - The deck editor theme uses nothing of Konami's from this repository: `make_assets.py` builds its files on your
   machine from your own game and from chrisfand's TFHD-2022 texture pack.
+- The song select theme likewise uses nothing of SEGA's or Crypton Future Media's from this repository. Its file
+  readers follow [MikuMikuLibrary](https://github.com/blueskythlikesclouds/MikuMikuLibrary), including the archive
+  keys that project publishes.
 - Everything else: MIT, see `LICENSE`.
 
-This project is not affiliated with Sony, Google, ATLUS, SEGA or Konami. BRAVIA, Google TV, Persona and Yu-Gi-Oh! are
-their owners' trademarks.
+This project is not affiliated with Sony, Google, ATLUS, SEGA, Konami or Crypton Future Media. BRAVIA, Google TV,
+Persona, Yu-Gi-Oh!, Project DIVA and Hatsune Miku are their owners' trademarks.

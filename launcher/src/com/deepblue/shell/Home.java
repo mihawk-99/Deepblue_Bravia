@@ -43,9 +43,9 @@ import java.util.Set;
 
 /**
  * Home screen activity: app list, remote keys, sounds and the optional media slots.
- * Two themes: "persona" is drawn natively by MenuView; "deck" is the deck-editor page (prototype/deck.html), shown in a
- * WebView from files/web/ and fed the real app list, the remote's keys and app launching. Back opens the page's menu;
- * in the Persona theme, Back pressed twice switches to the deck theme.
+ * Themes: "persona" is drawn natively by MenuView; any other is a page, files/web/<theme>.html ("deck" is
+ * prototype/deck.html, "miku" prototype/miku.html), shown in a WebView and fed the real app list, the remote's keys and
+ * app launching. Back opens the page's menu; in the Persona theme, Back pressed twice switches to the deck theme.
  * Slots live in the app's external files dir (/sdcard/Android/data/com.deepblue.shell/files):
  *   art.intro.mp4 + art.loop.mp4  full-screen video background (replaces the procedural water)
  *   art.webp / art.png            image or animated image on the left, over the procedural water
@@ -89,8 +89,9 @@ public class Home extends Activity implements MenuView.Host {
         webDir = new File(dir, "web");
         String asked = getIntent().getStringExtra("theme");  // adb: am start -n com.deepblue.shell/.Home --es theme deck
         if (asked != null) settings().edit().putString("theme", asked).apply();
-        if ("deck".equals(settings().getString("theme", "persona")) && new File(webDir, "deck.html").isFile()) {
-            startDeck();
+        String theme = settings().getString("theme", "persona");
+        if (theme.matches("[a-z]+") && !theme.equals("persona") && new File(webDir, theme + ".html").isFile()) {
+            startPage(theme);
             return;
         }
         introFile = new File(dir, "art.intro.mp4");
@@ -137,7 +138,8 @@ public class Home extends Activity implements MenuView.Host {
     protected void onPause() {
         super.onPause();
         resumed = false;
-        if (web != null) {  // stop the page's frames and movies while another app is in front
+        if (web != null) {  // stop the page's frames, movies and music while another app is in front
+            web.evaluateJavascript("window.away && away()", null);
             web.onPause();
             web.pauseTimers();
             return;
@@ -162,7 +164,7 @@ public class Home extends Activity implements MenuView.Host {
         recreate();
     }
 
-    private void startDeck() {
+    private void startPage(String theme) {
         writeApps();
         web = new WebView(this);
         web.setBackgroundColor(Color.BLACK);
@@ -180,11 +182,11 @@ public class Home extends Activity implements MenuView.Host {
             }
         });
         web.addJavascriptInterface(new Bridge(), "Android");  // only ever loads the local page below
-        web.loadUrl("file://" + new File(webDir, "deck.html").getPath());
+        web.loadUrl("file://" + new File(webDir, theme + ".html").getPath());
         setContentView(web);
     }
 
-    /** What the deck page may ask of the TV. Called on a WebView thread. */
+    /** What a theme's page may ask of the TV. Called on a WebView thread. */
     private final class Bridge {
         @JavascriptInterface
         public void launch(String pkg) {
@@ -233,7 +235,7 @@ public class Home extends Activity implements MenuView.Host {
         return !first;
     }
 
-    /** Deck theme: the remote's keys go to the page as arrow keys, Enter and Escape (its menu key). */
+    /** Page themes: the remote's keys go to the page as arrow keys, Enter and Escape (its menu key). */
     @Override
     public boolean dispatchKeyEvent(KeyEvent e) {
         if (web == null) return super.dispatchKeyEvent(e);

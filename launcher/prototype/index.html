@@ -328,14 +328,14 @@ function tickClock(ms) {
 }
 
 // Theme menu (Back on the remote; M or Esc here): switch to another launcher theme.
-const THEMES = [['PERSONA', null], ['DUEL ACADEMY', 'deck.html']];  // name, page of that theme's prototype
+const THEMES = [['PERSONA', null], ['DUEL ACADEMY', 'deck.html'], ['PROJECT DIVA', 'miku.html']];  // name, page of that theme's prototype
 let menu = false, themeAt = 0;
 function drawMenu() {
   if (!menu) return;
   c.fillStyle = 'rgba(10,59,216,.9)'; c.fillRect(0, 0, W, H);
-  heavyText('THEME', W * .5, H * .28, H * .07, '#7cf0ff');
+  heavyText('THEME', W * .5, H * .22, H * .07, '#7cf0ff');
   THEMES.forEach(([name], i) => {
-    const y = H * (.48 + i * .17), on = i === themeAt, size = H * (on ? .13 : .09);
+    const y = H * (.4 + i * .17), on = i === themeAt, size = H * (on ? .13 : .09);
     c.save(); c.translate(W * .5, y); c.rotate(-8 * Math.PI / 180);
     if (on) heavyText(name, -size * .045, size * .035, size, '#0b0b12');  // black offset shadow, like the selected menu line
     heavyText(name, 0, 0, size, on ? '#ec0f2a' : '#fff');
@@ -393,7 +393,7 @@ addEventListener('keydown', e => {
   if (confirmT >= 0) return e.preventDefault();
   if (['m', 'M', 'Escape', 'Backspace'].includes(e.key)) { if (!e.repeat) { menu = !menu; play('page'); } return e.preventDefault(); }
   if (menu) {
-    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { themeAt = (themeAt + 1) % THEMES.length; play('move'); }
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { themeAt = (themeAt + (e.key === 'ArrowDown' ? 1 : THEMES.length - 1)) % THEMES.length; play('move'); }
     else if (e.key === 'Enter' && !e.repeat) { if (THEMES[themeAt][1]) location.href = THEMES[themeAt][1]; else menu = false; }
     return e.preventDefault();
   }

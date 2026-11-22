@@ -10,6 +10,9 @@ launcher/prototype/banners/
 # the deck-editor theme's game art, sounds and movies: built locally by make_assets.py from your own ISO and HD pack
 launcher/prototype/deck/*
 !launcher/prototype/deck/make_assets.py
+# the same for the Project DIVA theme: built from your own copy of Mega Mix+
+launcher/prototype/miku/*
+!launcher/prototype/miku/make_assets.py
 launcher/tv-media/*
 !launcher/tv-media/art.intro.mp4
 !launcher/tv-media/art.loop.mp4
